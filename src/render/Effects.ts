@@ -15,15 +15,18 @@ import type { TileMap } from '../world/TileMap';
  * behaviour is what makes placeholder art read as grounded.
  */
 
-export const enum ParticleKind {
-  Blood = 0,
-  Spark = 1,
-  Smoke = 2,
-  Dust = 3,
-  Casing = 4,
-  Tracer = 5,
-  Ember = 6,
-}
+/** Particle archetypes. Erasable const object - see the note on `Tile`. */
+export const ParticleKind = {
+  Blood: 0,
+  Spark: 1,
+  Smoke: 2,
+  Dust: 3,
+  Casing: 4,
+  Tracer: 5,
+  Ember: 6,
+} as const;
+
+export type ParticleKind = (typeof ParticleKind)[keyof typeof ParticleKind];
 
 interface Particle {
   alive: boolean;

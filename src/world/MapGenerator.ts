@@ -215,14 +215,21 @@ export function generateMap(bp: MapBlueprint, seed: number): GeneratedMap {
   // 8. Extractions on opposing edges, at least one conditional.
   buildExtracts(map, rng, bp, result);
 
-  // 9. Spawns: player far from extracts, AI distributed across zones.
-  buildSpawns(map, rng, bp, result, buildings);
+  // 8b. Connectivity guarantee. Random fence lines, clutter and buildings can
+  // combine to seal a corner off, which would make a raid unwinnable. Rather
+  // than constrain the generator until that can never happen (and lose the
+  // interesting layouts), we detect it and breach a way through afterwards.
+  const regions = ensureConnectivity(map, result);
+
+  // 9. Spawns: player far from extracts, AI distributed across zones. Both are
+  // restricted to the main region so nothing spawns in a sealed pocket.
+  buildSpawns(map, rng, bp, result, buildings, regions);
 
   // 10. Patrol routes threading the open ground and building interiors.
   buildPatrolRoutes(map, rng, result);
 
   // 11. Loot anchors weighted towards interiors and the boss lair.
-  placeLootAnchors(map, rng, bp, result, buildings);
+  placeLootAnchors(map, rng, bp, result, buildings, regions);
 
   // 12. Boss lair in the largest building, if the blueprint has one.
   if (bp.hasBoss && buildings.length > 0) {
@@ -491,7 +498,7 @@ function scatterClutter(map: TileMap, rng: Rng, bp: MapBlueprint, occupied: Rect
 function buildZones(map: TileMap, buildings: Rect[], bp: MapBlueprint): void {
   // Outer ring: low danger, low value - the "get your bearings" band.
   map.addZone({
-    name: 'Aussengelaende',
+    name: 'Außengelände',
     x0: 1, y0: 1, x1: bp.width - 2, y1: bp.height - 2,
     danger: 0.25, interior: false,
   });
@@ -514,7 +521,7 @@ function buildExtracts(map: TileMap, rng: Rng, bp: MapBlueprint, out: GeneratedM
     { x: margin, y: margin, name: 'Nordtor' },
     { x: bp.width - margin, y: margin, name: 'Bahnrampe' },
     { x: margin, y: bp.height - margin, name: 'Kanalsteg' },
-    { x: bp.width - margin, y: bp.height - margin, name: 'Suedschleuse' },
+    { x: bp.width - margin, y: bp.height - margin, name: 'Südschleuse' },
     { x: Math.floor(bp.width / 2), y: margin, name: 'Zollhaus' },
   ];
   rng.shuffle(candidates);
@@ -551,12 +558,238 @@ function buildExtracts(map: TileMap, rng: Rng, bp: MapBlueprint, out: GeneratedM
   });
 }
 
+/**
+ * RegionMap - connected components of walkable tiles.
+ *
+ * `mainId` is the largest component, which is what everything gameplay-facing
+ * is restricted to. Anything the generator wants to place is checked against
+ * `isMain()` first, so a sealed pocket can never hold a spawn, a patrol or a
+ * container the player cannot reach.
+ */
+interface RegionMap {
+  ids: Int32Array;
+  mainId: number;
+  width: number;
+  isMain(x: number, y: number): boolean;
+}
+
+/**
+ * Cost of breaching a tile when carving a repair path.
+ *
+ * The numbers encode a preference order rather than physics: cut a fence
+ * before a wooden shed, a shed before brick, and only tunnel through concrete
+ * as a last resort. Breaches therefore land where a real route would.
+ */
+function breachCost(tile: number): number {
+  switch (tile) {
+    case Tile.Fence:
+      return 3;
+    case Tile.Crate:
+      return 4;
+    case Tile.Window:
+    case Tile.Glass:
+      return 7;
+    case Tile.DoorClosed:
+      return 2;
+    case Tile.Wood:
+      return 12;
+    case Tile.Metal:
+      return 16;
+    case Tile.Brick:
+      return 20;
+    case Tile.Container:
+      return 22;
+    case Tile.Rock:
+      return 26;
+    case Tile.Concrete:
+      return 42;
+    default:
+      return 1;
+  }
+}
+
+/** Flood-fill walkable tiles into connected components. */
+function computeRegions(map: TileMap): RegionMap {
+  const ids = new Int32Array(map.width * map.height).fill(-1);
+  const queue = new Int32Array(map.width * map.height);
+  const sizes: number[] = [];
+
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      const start = y * map.width + x;
+      if (ids[start] !== -1 || map.isSolid(x, y)) continue;
+
+      const id = sizes.length;
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      ids[start] = id;
+      let size = 0;
+
+      while (head < tail) {
+        const current = queue[head++];
+        size++;
+        const cx = current % map.width;
+        const cy = (current / map.width) | 0;
+        // Four-way: a diagonal gap between two solid tiles is not walkable
+        // for a circle-shaped actor, so it must not count as connected.
+        for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+          const nx = cx + dx;
+          const ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= map.width || ny >= map.height) continue;
+          const ni = ny * map.width + nx;
+          if (ids[ni] !== -1 || map.isSolid(nx, ny)) continue;
+          ids[ni] = id;
+          queue[tail++] = ni;
+        }
+      }
+      sizes.push(size);
+    }
+  }
+
+  let mainId = 0;
+  for (let i = 1; i < sizes.length; i++) {
+    if (sizes[i] > sizes[mainId]) mainId = i;
+  }
+
+  return {
+    ids,
+    mainId,
+    width: map.width,
+    isMain(x: number, y: number): boolean {
+      if (x < 0 || y < 0 || x >= map.width || y >= map.height) return false;
+      return ids[y * map.width + x] === mainId;
+    },
+  };
+}
+
+/**
+ * Make every extraction reachable from the map's main region, breaching
+ * geometry where necessary. Returns the region map after repairs.
+ */
+function ensureConnectivity(map: TileMap, out: GeneratedMap): RegionMap {
+  let regions = computeRegions(map);
+
+  for (const extract of out.extracts) {
+    const ex = Math.floor(extract.x);
+    const ey = Math.floor(extract.y);
+    if (regions.isMain(ex, ey)) continue;
+    if (carveBreach(map, ex, ey, regions)) {
+      // Geometry changed - components must be recomputed before the next test.
+      regions = computeRegions(map);
+    }
+  }
+
+  return regions;
+}
+
+/**
+ * Dijkstra from a point to the nearest main-region tile, treating solid tiles
+ * as expensive rather than impassable, then clear whatever it had to cross.
+ */
+function carveBreach(map: TileMap, startX: number, startY: number, regions: RegionMap): boolean {
+  const n = map.width * map.height;
+  const dist = new Float32Array(n).fill(Infinity);
+  const prev = new Int32Array(n).fill(-1);
+  const visited = new Uint8Array(n);
+
+  const startIndex = startY * map.width + startX;
+  dist[startIndex] = 0;
+
+  // Binary min-heap keyed on distance. A linear scan would be O(n^2) - roughly
+  // 85 million comparisons on a 96x96 map, which is a visible stall even at
+  // generation time.
+  const heap = new Int32Array(n * 4);
+  let heapSize = 0;
+
+  const push = (node: number): void => {
+    if (heapSize >= heap.length) return;
+    let i = heapSize++;
+    const d = dist[node];
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (dist[heap[parent]] <= d) break;
+      heap[i] = heap[parent];
+      i = parent;
+    }
+    heap[i] = node;
+  };
+
+  const pop = (): number => {
+    const top = heap[0];
+    const last = heap[--heapSize];
+    if (heapSize > 0) {
+      let i = 0;
+      const d = dist[last];
+      for (;;) {
+        const l = 2 * i + 1;
+        if (l >= heapSize) break;
+        const r = l + 1;
+        const child = r < heapSize && dist[heap[r]] < dist[heap[l]] ? r : l;
+        if (dist[heap[child]] >= d) break;
+        heap[i] = heap[child];
+        i = child;
+      }
+      heap[i] = last;
+    }
+    return top;
+  };
+
+  push(startIndex);
+
+  let target = -1;
+  while (heapSize > 0) {
+    const current = pop();
+    if (visited[current]) continue;
+    visited[current] = 1;
+
+    const cx = current % map.width;
+    const cy = (current / map.width) | 0;
+    if (regions.isMain(cx, cy)) {
+      target = current;
+      break;
+    }
+
+    for (const [dx, dy] of [[0, -1], [1, 0], [0, 1], [-1, 0]] as const) {
+      const nx = cx + dx;
+      const ny = cy + dy;
+      // Never breach the outer perimeter - the map must stay enclosed.
+      if (nx < 2 || ny < 2 || nx >= map.width - 2 || ny >= map.height - 2) continue;
+      const ni = ny * map.width + nx;
+      if (visited[ni]) continue;
+      const cost = breachCost(map.at(nx, ny));
+      if (dist[current] + cost < dist[ni]) {
+        dist[ni] = dist[current] + cost;
+        prev[ni] = current;
+        push(ni);
+      }
+    }
+  }
+
+  if (target === -1) return false;
+
+  // Walk the path back, clearing anything solid into open floor.
+  let node = target;
+  let carved = false;
+  while (node !== -1) {
+    const x = node % map.width;
+    const y = (node / map.width) | 0;
+    if (map.isSolid(x, y)) {
+      map.set(x, y, Tile.Floor);
+      carved = true;
+    }
+    node = prev[node];
+  }
+  return carved;
+}
+
 function buildSpawns(
   map: TileMap,
   rng: Rng,
   bp: MapBlueprint,
   out: GeneratedMap,
   buildings: Rect[],
+  regions: RegionMap,
 ): void {
   // Player spawns: prefer positions far from every extract so extraction is
   // always a journey, and away from the boss lair.
@@ -566,6 +799,7 @@ function buildSpawns(
     const x = rng.int(4, bp.width - 5);
     const y = rng.int(4, bp.height - 5);
     if (map.isSolid(x, y) || map.at(x, y) === Tile.Water) continue;
+    if (!regions.isMain(x, y)) continue;
     if (isInsideAny(x, y, buildings, 1)) continue;
     let minExtract = Infinity;
     for (const e of out.extracts) {
@@ -592,6 +826,7 @@ function buildSpawns(
     const x = rng.int(3, bp.width - 4);
     const y = rng.int(3, bp.height - 4);
     if (map.isSolid(x, y) || map.at(x, y) === Tile.Water) continue;
+    if (!regions.isMain(x, y)) continue;
     // Never spawn AI on top of the player's arrival area.
     let tooClose = false;
     for (const ps of out.playerSpawns) {
@@ -647,13 +882,14 @@ function placeLootAnchors(
   bp: MapBlueprint,
   out: GeneratedMap,
   buildings: Rect[],
+  regions: RegionMap,
 ): void {
   // Interior anchors: the reward for entering contested indoor space.
   for (let bi = 0; bi < buildings.length; bi++) {
     const b = buildings[bi];
     const count = Math.floor((rectW(b) * rectH(b)) / 26) + 2;
     for (let i = 0; i < count; i++) {
-      const spot = findFreeTile(map, rng, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1);
+      const spot = findFreeTile(map, rng, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1, regions);
       if (!spot) continue;
       const primary = bi === 0;
       const containerId = rng.weighted(
@@ -669,7 +905,7 @@ function placeLootAnchors(
   // Exterior anchors: fewer, cheaper, but safe to grab on the way through.
   const outdoor = Math.floor(bp.width * bp.height * 0.0025);
   for (let i = 0; i < outdoor; i++) {
-    const spot = findFreeTile(map, rng, 3, 3, bp.width - 4, bp.height - 4);
+    const spot = findFreeTile(map, rng, 3, 3, bp.width - 4, bp.height - 4, regions);
     if (!spot) continue;
     if (isInsideAny(spot.x, spot.y, buildings, 0)) continue;
     const containerId = rng.weighted(
@@ -687,11 +923,15 @@ function findFreeTile(
   y0: number,
   x1: number,
   y1: number,
+  regions?: RegionMap,
 ): { x: number; y: number } | null {
   for (let i = 0; i < 50; i++) {
     const x = rng.int(x0, x1);
     const y = rng.int(y0, y1);
-    if (!map.isSolid(x, y) && map.at(x, y) !== Tile.Water) return { x, y };
+    if (map.isSolid(x, y) || map.at(x, y) === Tile.Water) continue;
+    // Loot the player cannot walk to is loot that does not exist.
+    if (regions && !regions.isMain(x, y)) continue;
+    return { x, y };
   }
   return null;
 }

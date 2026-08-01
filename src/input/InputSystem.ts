@@ -92,7 +92,16 @@ export class InputSystem {
 
     const onPointerDown = (e: PointerEvent): void => {
       if (e.pointerType === 'touch') this.touchDetected = true;
-      // Buttons handle their own pointers and stop propagation.
+
+      // Never capture a pointer that started on the UI. Without this the
+      // surface's setPointerCapture swallows the rest of the gesture and the
+      // button never receives its click - which silently breaks every menu on
+      // touch devices while still "working" for synthetic clicks.
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('.screen, .touch-btn, button, input, select, textarea, .panel')) {
+        return;
+      }
+
       const rect = surface.getBoundingClientRect();
       const localX = e.clientX - rect.left;
       const isLeftHalf = localX < rect.width * 0.42;

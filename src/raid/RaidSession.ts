@@ -10,6 +10,10 @@ import { EffectSystem } from '../render/Effects';
 import { AIDirector } from '../ai/AIDirector';
 import { LootSystem, type LootContainer } from '../loot/LootSystem';
 import { Player } from '../player/Player';
+import { WeaponController, type FireContext } from '../weapons/WeaponController';
+import type { ResolveContext } from '../weapons/WeaponRuntime';
+import type { InputState } from '../input/InputSystem';
+import type { EquipSlot } from '../data/ItemTypes';
 import { defOf, stackValue, type ItemStack } from '../inventory/ItemStack';
 import type { Profile } from '../meta/Profile';
 import { ExtractionSystem } from './Extraction';
@@ -68,6 +72,10 @@ export class RaidSession {
   readonly events: DynamicEventSystem;
 
   readonly player: Player;
+  /** The player's firing state machine - the same class the AI uses. */
+  readonly playerWeapon: WeaponController;
+  /** Which slot the player currently has in hand. */
+  activeWeaponSlot: EquipSlot = 'primary';
 
   phase: RaidPhase = 'active';
   /** Seconds elapsed since insertion. */
@@ -113,6 +121,7 @@ export class RaidSession {
     this.events = new DynamicEventSystem(bus, seed);
 
     this.player = new Player(bus);
+    this.playerWeapon = new WeaponController(bus, this.ballistics, this.player.id, true, seed);
     this.spatial = new SpatialHash(this.map.width, this.map.height, 6, 512);
 
     this.setup();
@@ -126,6 +135,11 @@ export class RaidSession {
     // The raid inventory *is* the profile loadout: what you brought is what
     // you have, and losing it means losing it for real.
     this.transferLoadout();
+
+    // Start with whatever is in the primary slot, falling back down the list.
+    const weapons = this.player.inventory.weapons();
+    this.activeWeaponSlot = weapons[0]?.slot ?? 'primary';
+    this.playerWeapon.setWeapon(weapons[0]?.stack ?? null, this.resolveContext(), true);
 
     this.loot.populate(this.generated.lootAnchors, this.map);
     this.ai.populate(this.generated, this.map, this.generated.seed);
@@ -162,6 +176,106 @@ export class RaidSession {
   // =========================================================================
   // Simulation
   // =========================================================================
+
+  /**
+   * Apply one tick of player input.
+   *
+   * Kept separate from `update` so the simulation can be stepped without input
+   * (menus, the death camera) and so input handling stays testable.
+   */
+  applyInput(dt: number, input: InputState, toggleAds: boolean): void {
+    if (this.phase === 'ended' || !this.player.alive) return;
+
+    // Look: the input system has already scaled by sensitivity and ADS.
+    this.player.look(input.lookX, input.lookY);
+
+    // Lean.
+    this.player.setLean(input.leanLeft ? -1 : input.leanRight ? 1 : 0);
+
+    // Movement. Aiming and searching both slow the player right down.
+    const moveScale = this.playerWeapon.adsProgress > 0.5 ? 0.55 : 1;
+    this.player.update(dt, this.map, input.moveX * moveScale, input.moveY * moveScale, input.sprint);
+
+    // Sprinting physically cannot be combined with a shouldered weapon.
+    const wantAds = toggleAds ? this.adsToggled : input.ads;
+    this.playerWeapon.setAds(wantAds && !this.player.sprinting && !this.player.isBusy);
+
+    if (input.fire && !this.player.isBusy && !this.player.sprinting) {
+      this.playerWeapon.pressTrigger();
+    } else {
+      this.playerWeapon.releaseTrigger();
+    }
+
+    this.playerWeapon.update(dt, this.fireContext());
+
+    // Skills improve through use, not through spending points.
+    if (this.player.sprinting) this.profile.progression.addSkillXp('endurance', dt * 4);
+    if (this.player.stance === 1 && this.player.speed > 0.1) {
+      this.profile.progression.addSkillXp('stealth', dt * 3);
+    }
+    if (this.player.carriedWeight > 26) this.profile.progression.addSkillXp('strength', dt * 1.5);
+    this.profile.progression.addSkillXp('perception', dt * 0.35);
+  }
+
+  /** Toggle-to-aim state, when the player prefers it over hold-to-aim. */
+  adsToggled = false;
+
+  toggleAds(): void {
+    this.adsToggled = !this.adsToggled;
+  }
+
+  private resolveContext(): ResolveContext {
+    return {
+      gearErgoPenalty: this.player.inventory.stats.ergonomicsPenalty,
+      handlingSkill: this.profile.progression.factor('weaponHandling'),
+      recoilSkill: this.profile.progression.factor('recoilControl'),
+    };
+  }
+
+  private fireContext(): FireContext {
+    return {
+      x: this.player.x,
+      y: this.player.y,
+      z: this.player.muzzleHeight,
+      angle: this.player.angle + this.playerWeapon.recoilYaw,
+      pitch: this.player.pitch + this.playerWeapon.recoilPitch,
+      speed: this.player.speed,
+      stance: this.player.stance,
+      swayMultiplier: this.player.health.modifiers.sway,
+      resolve: this.resolveContext(),
+    };
+  }
+
+  /** Current weapon dispersion in radians, for the dynamic crosshair. */
+  get playerSpread(): number {
+    return this.playerWeapon.currentSpread(this.fireContext());
+  }
+
+  /** Cycle to the next weapon the player is carrying. */
+  swapWeapon(): void {
+    const weapons = this.player.inventory.weapons();
+    if (weapons.length === 0) return;
+    const index = weapons.findIndex((w) => w.slot === this.activeWeaponSlot);
+    const next = weapons[(index + 1) % weapons.length];
+    if (next.slot === this.activeWeaponSlot && weapons.length === 1) return;
+    this.activeWeaponSlot = next.slot;
+    this.playerWeapon.setWeapon(next.stack, this.resolveContext());
+    this.profile.progression.addSkillXp('weaponHandling', 4);
+  }
+
+  reload(): void {
+    if (this.playerWeapon.state === 'jammed') {
+      this.playerWeapon.clearJam();
+      return;
+    }
+    if (this.playerWeapon.reload(this.player.inventory)) {
+      this.profile.progression.addSkillXp('weaponHandling', 8);
+    }
+  }
+
+  cycleFireMode(): void {
+    this.playerWeapon.cycleFireMode();
+  }
 
   update(dt: number): void {
     if (this.phase === 'ended') return;

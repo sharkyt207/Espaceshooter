@@ -160,17 +160,24 @@ export class PerfGovernor {
       return false;
     }
 
-    if (this.overBudgetStreak >= 12 && this.scale > this.minScale) {
-      this.scale = Math.max(this.minScale, this.scale - 0.08);
+    // Asymmetric on purpose: drop resolution quickly when we are missing
+    // frames (the player feels that immediately), and creep back up slowly
+    // (a resolution that oscillates is more distracting than one that is
+    // slightly too low). The step down is also larger than the step up.
+    if (this.overBudgetStreak >= 8 && this.scale > this.minScale) {
+      // Fall harder the further over budget we are, so a device that is
+      // badly overcommitted reaches a playable scale in a second or two
+      // instead of walking down in eight small steps.
+      const severity = frameMs > this.targetMs * 1.8 ? 0.16 : 0.08;
+      this.scale = Math.max(this.minScale, this.scale - severity);
       this.overBudgetStreak = 0;
-      this.cooldown = 1.0;
+      this.cooldown = 0.6;
       return true;
     }
-    // Scale back up more cautiously than we scale down.
-    if (this.underBudgetStreak >= 90 && this.scale < this.maxScale) {
+    if (this.underBudgetStreak >= 110 && this.scale < this.maxScale) {
       this.scale = Math.min(this.maxScale, this.scale + 0.05);
       this.underBudgetStreak = 0;
-      this.cooldown = 2.5;
+      this.cooldown = 3.0;
       return true;
     }
     return false;

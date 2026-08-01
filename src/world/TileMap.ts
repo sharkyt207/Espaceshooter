@@ -16,24 +16,34 @@
 /** One tile edge in metres. Chosen so a 96x96 map is a ~190 m compound. */
 export const METERS_PER_TILE = 2.0;
 
-export const enum Tile {
-  Floor = 0,
-  Concrete = 1,
-  Brick = 2,
-  Metal = 3,
-  Wood = 4,
-  Container = 5,
-  Fence = 6,
-  Window = 7,
-  DoorClosed = 8,
-  DoorOpen = 9,
-  Rubble = 10,
-  Crate = 11,
-  Rock = 12,
-  Water = 13,
-  Grate = 14,
-  Glass = 15,
-}
+/**
+ * Tile ids.
+ *
+ * A plain const object rather than a TypeScript enum: enums need a runtime
+ * transform, which rules out type-stripping runtimes (and Node's built-in
+ * test runner). This form is erasable, tree-shakes cleanly, and still gives
+ * us `Tile.Concrete` at the call site and a `Tile` union as a type.
+ */
+export const Tile = {
+  Floor: 0,
+  Concrete: 1,
+  Brick: 2,
+  Metal: 3,
+  Wood: 4,
+  Container: 5,
+  Fence: 6,
+  Window: 7,
+  DoorClosed: 8,
+  DoorOpen: 9,
+  Rubble: 10,
+  Crate: 11,
+  Rock: 12,
+  Water: 13,
+  Grate: 14,
+  Glass: 15,
+} as const;
+
+export type Tile = (typeof Tile)[keyof typeof Tile];
 
 export const TILE_COUNT = 16;
 
@@ -130,11 +140,11 @@ export const TILE_DEFS: readonly TileDef[] = [
     solid: true, opaque: false, wall: true, height: 3, penetration: 3,
     energyLoss: 0.04, soundDamping: 0.05, texture: 7, tint: 0x7fa8b0,
   }),
-  def(Tile.DoorClosed, 'Tuer', {
+  def(Tile.DoorClosed, 'Tür', {
     solid: true, opaque: true, wall: true, height: 2.4, penetration: 12,
     energyLoss: 0.25, soundDamping: 0.4, texture: 8, tint: 0x7a5a3a, moveCost: 1.6,
   }),
-  def(Tile.DoorOpen, 'Tuer (offen)', { texture: 0, tint: 0x6b6a63, moveCost: 1 }),
+  def(Tile.DoorOpen, 'Tür (offen)', { texture: 0, tint: 0x6b6a63, moveCost: 1 }),
   def(Tile.Rubble, 'Schutt', {
     height: 0.5, moveCost: 1.9, texture: 9, tint: 0x74706a, footstepLoudness: 1.5,
   }),

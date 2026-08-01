@@ -1,0 +1,878 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { Rng } from '../src/core/Random';
+import { SpatialHash } from '../src/core/SpatialHash';
+import { Pool } from '../src/core/Pool';
+import { angleDelta, clamp, damp, pointSegmentDistSq, wrapAngle } from '../src/core/Math2D';
+import { EventBus } from '../src/core/EventBus';
+import { Tile, TileMap } from '../src/world/TileMap';
+import { hasLineOfSight, walkSegment } from '../src/world/Raycast';
+import { circleFits, moveCircle } from '../src/world/Physics';
+import { CoverMap, NavGrid } from '../src/world/NavGrid';
+import { generateMap } from '../src/world/MapGenerator';
+import { MAP_BLUEPRINTS } from '../src/data/MapData';
+import { ItemDB } from '../src/data/ItemDatabase';
+import { GridContainer } from '../src/inventory/GridContainer';
+import { createStack, stackValue, stackWeight } from '../src/inventory/ItemStack';
+import { Inventory } from '../src/inventory/Inventory';
+import { HealthSystem } from '../src/health/HealthSystem';
+import {
+  chamberFromMagazine,
+  cycleRound,
+  loadMagazine,
+  resolveWeapon,
+  totalRounds,
+} from '../src/weapons/WeaponRuntime';
+import { LootSystem } from '../src/loot/LootSystem';
+import { Progression } from '../src/meta/Progression';
+import { Hideout } from '../src/meta/Hideout';
+import { QuestSystem } from '../src/meta/Quests';
+import { TraderSystem } from '../src/meta/Traders';
+
+/**
+ * Simulation tests.
+ *
+ * These cover the parts of the game where a silent regression would be
+ * expensive and hard to notice by playing: determinism, spatial correctness,
+ * inventory bookkeeping and the damage/economy rules. Rendering, audio and UI
+ * are verified by the browser smoke test instead - they need a DOM.
+ */
+
+const bus = new EventBus<Record<string, never>>() as never;
+
+// ===========================================================================
+// Core
+// ===========================================================================
+
+describe('Rng', () => {
+  test('is deterministic for a given seed', () => {
+    const a = new Rng('seed-1');
+    const b = new Rng('seed-1');
+    for (let i = 0; i < 200; i++) assert.equal(a.next(), b.next());
+  });
+
+  test('different seeds diverge', () => {
+    const a = new Rng('seed-1');
+    const b = new Rng('seed-2');
+    let differences = 0;
+    for (let i = 0; i < 50; i++) if (a.next() !== b.next()) differences++;
+    assert.ok(differences > 40, 'streams should be independent');
+  });
+
+  test('float stays in [0,1) and int is inclusive', () => {
+    const rng = new Rng(42);
+    for (let i = 0; i < 5000; i++) {
+      const f = rng.float();
+      assert.ok(f >= 0 && f < 1);
+      const n = rng.int(3, 5);
+      assert.ok(n >= 3 && n <= 5);
+    }
+  });
+
+  test('weighted picks respect zero weights', () => {
+    const rng = new Rng(7);
+    for (let i = 0; i < 500; i++) {
+      assert.equal(rng.weighted(['a', 'b'], [0, 1]), 'b');
+    }
+    assert.equal(rng.weighted(['a', 'b'], [0, 0]), undefined);
+  });
+
+  test('gaussianClamped never exceeds its sigma bound', () => {
+    const rng = new Rng(11);
+    for (let i = 0; i < 2000; i++) {
+      const v = rng.gaussianClamped(0, 1, 2);
+      assert.ok(Math.abs(v) <= 2 + 1e-9);
+    }
+  });
+});
+
+describe('Math2D', () => {
+  test('wrapAngle maps into (-PI, PI]', () => {
+    for (let i = -20; i <= 20; i++) {
+      const a = wrapAngle(i * 1.1);
+      assert.ok(a > -Math.PI - 1e-9 && a <= Math.PI + 1e-9);
+    }
+  });
+
+  test('angleDelta takes the short way round', () => {
+    assert.ok(Math.abs(angleDelta(0.1, Math.PI * 2 - 0.1) + 0.2) < 1e-6);
+  });
+
+  test('damp is frame-rate independent', () => {
+    // One 0.5 s step and fifty 0.01 s steps must land in the same place.
+    const one = damp(0, 100, 4, 0.5);
+    let many = 0;
+    for (let i = 0; i < 50; i++) many = damp(many, 100, 4, 0.01);
+    assert.ok(Math.abs(one - many) < 1e-6);
+  });
+
+  test('pointSegmentDistSq handles the endpoints and the middle', () => {
+    assert.equal(pointSegmentDistSq(0, 0, 0, 0, 10, 0), 0);
+    assert.equal(pointSegmentDistSq(5, 3, 0, 0, 10, 0), 9);
+    // Beyond the end clamps to the endpoint rather than the infinite line.
+    assert.equal(pointSegmentDistSq(20, 0, 0, 0, 10, 0), 100);
+  });
+
+  test('clamp bounds both ends', () => {
+    assert.equal(clamp(-5, 0, 1), 0);
+    assert.equal(clamp(5, 0, 1), 1);
+  });
+});
+
+describe('SpatialHash', () => {
+  test('finds only entities within the radius', () => {
+    const hash = new SpatialHash(64, 64, 4, 128);
+    hash.begin();
+    hash.insert(1, 10, 10);
+    hash.insert(2, 10.5, 10.5);
+    hash.insert(3, 40, 40);
+    hash.build();
+
+    const out: number[] = [];
+    hash.queryRadius(10, 10, 2, out);
+    assert.deepEqual(out.sort(), [1, 2]);
+
+    hash.queryRadius(40, 40, 1, out);
+    assert.deepEqual(out, [3]);
+
+    hash.queryRadius(0, 0, 1, out);
+    assert.equal(out.length, 0);
+  });
+
+  test('handles entities on the far edge of the grid', () => {
+    const hash = new SpatialHash(32, 32, 4, 16);
+    hash.begin();
+    hash.insert(9, 31.9, 31.9);
+    hash.build();
+    const out: number[] = [];
+    hash.queryRadius(31, 31, 3, out);
+    assert.deepEqual(out, [9]);
+  });
+});
+
+describe('Pool', () => {
+  test('acquires up to capacity and releases by swap', () => {
+    const pool = new Pool(() => ({ v: 0 }), (o) => { o.v = -1; }, 3);
+    const a = pool.acquire()!;
+    const b = pool.acquire()!;
+    pool.acquire();
+    assert.equal(pool.active, 3);
+    assert.equal(pool.acquire(), undefined);
+
+    a.v = 1;
+    b.v = 2;
+    pool.releaseAt(0);
+    assert.equal(pool.active, 2);
+    pool.releaseAll();
+    assert.equal(pool.active, 0);
+  });
+});
+
+// ===========================================================================
+// World
+// ===========================================================================
+
+describe('TileMap', () => {
+  test('treats out of bounds as solid and opaque', () => {
+    const map = new TileMap(8, 8);
+    assert.equal(map.isSolid(-1, 0), true);
+    assert.equal(map.isOpaque(99, 0), true);
+    assert.equal(map.isSolid(4, 4), false);
+  });
+
+  test('material properties drive penetration and cover height', () => {
+    const map = new TileMap(8, 8);
+    map.set(2, 2, Tile.Concrete);
+    map.set(3, 2, Tile.Wood);
+    assert.ok(map.penetrationOf(2, 2) > map.penetrationOf(3, 2));
+    assert.equal(map.heightOf(2, 2), 3);
+  });
+
+  test('nearestOpen escapes a solid tile', () => {
+    const map = new TileMap(8, 8);
+    map.fillRect(0, 0, 7, 7, Tile.Concrete);
+    map.set(5, 5, Tile.Floor);
+    const open = map.nearestOpen(4, 4, 4);
+    assert.deepEqual(open, { x: 5, y: 5 });
+  });
+});
+
+describe('Raycast', () => {
+  test('line of sight is blocked by opaque tiles only', () => {
+    const map = new TileMap(16, 16);
+    assert.equal(hasLineOfSight(map, 1.5, 1.5, 14.5, 1.5), true);
+
+    map.set(8, 1, Tile.Concrete);
+    assert.equal(hasLineOfSight(map, 1.5, 1.5, 14.5, 1.5), false);
+
+    // A fence blocks movement but not vision, which is the whole point of it.
+    map.set(8, 1, Tile.Fence);
+    assert.equal(hasLineOfSight(map, 1.5, 1.5, 14.5, 1.5), true);
+  });
+
+  test('walkSegment visits every tile crossed, in order', () => {
+    const visited: string[] = [];
+    walkSegment(0.5, 0.5, 4.5, 0.5, (x, y) => {
+      visited.push(`${x},${y}`);
+      return true;
+    });
+    assert.deepEqual(visited, ['0,0', '1,0', '2,0', '3,0', '4,0']);
+  });
+
+  test('walkSegment stops early when the visitor returns false', () => {
+    let count = 0;
+    walkSegment(0.5, 0.5, 20.5, 0.5, () => {
+      count++;
+      return count < 3;
+    });
+    assert.equal(count, 3);
+  });
+});
+
+describe('Physics', () => {
+  test('a circle cannot overlap a solid tile', () => {
+    const map = new TileMap(8, 8);
+    map.set(4, 4, Tile.Concrete);
+    assert.equal(circleFits(map, 4.5, 4.5, 0.3), false);
+    assert.equal(circleFits(map, 2.5, 2.5, 0.3), true);
+    // Just outside the tile edge, by less than the radius.
+    assert.equal(circleFits(map, 3.8, 4.5, 0.3), false);
+  });
+
+  test('movement slides along a wall instead of stopping dead', () => {
+    const map = new TileMap(8, 8);
+    for (let y = 0; y < 8; y++) map.set(4, y, Tile.Concrete);
+    // Push diagonally into the wall: X is blocked, Y should still resolve.
+    const result = moveCircle(map, 3.5, 3.5, 0.5, 0.5, 0.3);
+    assert.ok(result.hitX, 'x should be blocked by the wall');
+    assert.ok(result.y > 3.5, 'y component should still apply');
+  });
+
+  test('fast movement does not tunnel through a thin wall', () => {
+    const map = new TileMap(32, 8);
+    for (let y = 0; y < 8; y++) map.set(10, y, Tile.Concrete);
+    const result = moveCircle(map, 2.5, 3.5, 20, 0, 0.3);
+    assert.ok(result.x < 10, `expected to stop before the wall, got ${result.x}`);
+  });
+});
+
+describe('NavGrid', () => {
+  test('finds a route around an obstacle', () => {
+    const map = new TileMap(24, 24);
+    // A wall with a single gap: the path must go through the gap.
+    for (let y = 0; y < 24; y++) map.set(12, y, Tile.Concrete);
+    map.set(12, 20, Tile.Floor);
+
+    const nav = new NavGrid(map);
+    const path = nav.findPath(3.5, 3.5, 20.5, 3.5);
+    assert.equal(path.found, true);
+    assert.ok(path.points.length > 0);
+
+    const last = path.points[path.points.length - 1];
+    assert.ok(Math.abs(last.x - 20.5) < 1.5 && Math.abs(last.y - 3.5) < 1.5);
+  });
+
+  test('reports failure when the target is walled off', () => {
+    const map = new TileMap(16, 16);
+    map.strokeRect(8, 8, 11, 11, Tile.Concrete);
+    const nav = new NavGrid(map);
+    const path = nav.findPath(2.5, 2.5, 9.5, 9.5);
+    assert.equal(path.found, false);
+  });
+
+  test('flow field points downhill toward the target', () => {
+    const map = new TileMap(24, 24);
+    const nav = new NavGrid(map);
+    nav.buildFlowField(20.5, 20.5, true);
+
+    const near = nav.flowCostAt(19, 19);
+    const far = nav.flowCostAt(3, 3);
+    assert.ok(far > near, 'cost must grow with distance from the target');
+
+    const dir = { x: 0, y: 0 };
+    assert.equal(nav.sampleFlow(3, 3, dir), true);
+    assert.ok(dir.x > 0 || dir.y > 0, 'should point towards the target');
+  });
+});
+
+describe('CoverMap', () => {
+  test('marks the side a wall protects', () => {
+    const map = new TileMap(16, 16);
+    // Wall directly north of (5,5).
+    map.set(5, 4, Tile.Concrete);
+    const cover = new CoverMap(map);
+    // Threat coming from the north (negative y).
+    assert.equal(cover.coversFrom(5, 5, 0, -1), true);
+    // Threat from the south is not covered by a wall to the north.
+    assert.equal(cover.coversFrom(5, 5, 0, 1), false);
+  });
+
+  test('open ground scores zero', () => {
+    const map = new TileMap(16, 16);
+    const cover = new CoverMap(map);
+    assert.equal(cover.scoreAt(8, 8), 0);
+  });
+});
+
+describe('MapGenerator', () => {
+  test('is deterministic for a seed', () => {
+    const bp = MAP_BLUEPRINTS[0];
+    const a = generateMap(bp, 12345);
+    const b = generateMap(bp, 12345);
+    assert.deepEqual(Array.from(a.map.tiles), Array.from(b.map.tiles));
+    assert.equal(a.extracts.length, b.extracts.length);
+    assert.equal(a.aiSpawns.length, b.aiSpawns.length);
+  });
+
+  test('produces a playable layout', () => {
+    for (const bp of MAP_BLUEPRINTS) {
+      const gen = generateMap(bp, 777);
+      assert.ok(gen.playerSpawns.length > 0, `${bp.id}: needs a player spawn`);
+      assert.ok(gen.extracts.length >= 2, `${bp.id}: needs multiple exits`);
+      assert.ok(gen.lootAnchors.length > 5, `${bp.id}: needs loot`);
+      assert.ok(gen.aiSpawns.length > 5, `${bp.id}: needs hostiles`);
+
+      // At least one exit must be unconditional, or a raid could be unwinnable.
+      const free = gen.extracts.filter((e) => !e.condition || e.condition.kind === 'always');
+      assert.ok(free.length >= 1, `${bp.id}: needs an unconditional exit`);
+
+      // Spawns must be on walkable ground.
+      for (const spawn of gen.playerSpawns) {
+        assert.equal(gen.map.isSolid(Math.floor(spawn.x), Math.floor(spawn.y)), false);
+      }
+    }
+  });
+
+  test('every extraction is reachable from the player spawn', () => {
+    const gen = generateMap(MAP_BLUEPRINTS[0], 4242);
+    const nav = new NavGrid(gen.map);
+    const spawn = gen.playerSpawns[0];
+    let reachable = 0;
+    for (const extract of gen.extracts) {
+      const path = nav.findPath(spawn.x, spawn.y, extract.x, extract.y, 20000);
+      if (path.found) reachable++;
+    }
+    assert.equal(reachable, gen.extracts.length, 'all exits must be reachable');
+  });
+});
+
+// ===========================================================================
+// Items and inventory
+// ===========================================================================
+
+describe('ItemDatabase', () => {
+  test('every referenced id resolves', () => {
+    for (const def of ItemDB.all) {
+      if (def.weapon) {
+        assert.ok(ItemDB.has(def.weapon.defaultMagazine), `${def.id}: bad default magazine`);
+        const mag = ItemDB.get(def.weapon.defaultMagazine);
+        assert.equal(mag.magazine?.caliber, def.weapon.caliber, `${def.id}: magazine calibre mismatch`);
+      }
+    }
+  });
+
+  test('every weapon calibre has ammunition', () => {
+    for (const def of ItemDB.ofCategory('weapon')) {
+      const ammo = ItemDB.ofCategory('ammo').filter((a) => a.ammo?.caliber === def.weapon!.caliber);
+      assert.ok(ammo.length > 0, `${def.id}: no ammunition for ${def.weapon!.caliber}`);
+    }
+  });
+
+  test('stackable items declare a stack size and vice versa', () => {
+    for (const def of ItemDB.all) {
+      if (def.stackable) assert.ok(def.maxStack > 1, `${def.id}: stackable but maxStack ${def.maxStack}`);
+      else assert.equal(def.maxStack, 1, `${def.id}: not stackable but maxStack ${def.maxStack}`);
+    }
+  });
+});
+
+describe('GridContainer', () => {
+  test('rejects placements that do not fit', () => {
+    const grid = new GridContainer(4, 2);
+    const rifle = createStack('wp_sg545'); // 4x2
+    assert.equal(grid.place(rifle, 0, 0), true);
+    const second = createStack('wp_sg545');
+    assert.equal(grid.place(second, 0, 0), false);
+    assert.equal(grid.findSpot(second), null);
+  });
+
+  test('rotates an item when that is the only way it fits', () => {
+    const grid = new GridContainer(2, 4);
+    const rifle = createStack('wp_sg545'); // 4 wide, 2 tall
+    const spot = grid.findSpot(rifle);
+    assert.ok(spot, 'should find a rotated placement');
+    assert.equal(spot!.rotated, true);
+  });
+
+  test('merges stackable items before taking a new cell', () => {
+    const grid = new GridContainer(4, 4);
+    grid.add(createStack('ammo_545_ps', 40));
+    assert.equal(grid.slots.length, 1);
+    grid.add(createStack('ammo_545_ps', 15));
+    // 40 + 15 = 55, below the 60 cap, so it merges into the same slot.
+    assert.equal(grid.slots.length, 1);
+    assert.equal(grid.countOf('ammo_545_ps'), 55);
+  });
+
+  test('overflows into a second slot past the stack cap', () => {
+    const grid = new GridContainer(4, 4);
+    grid.add(createStack('ammo_545_ps', 60));
+    grid.add(createStack('ammo_545_ps', 30));
+    assert.equal(grid.countOf('ammo_545_ps'), 90);
+    assert.equal(grid.slots.length, 2);
+  });
+
+  test('consume takes from existing stacks and cleans up empties', () => {
+    const grid = new GridContainer(4, 4);
+    grid.add(createStack('ammo_545_ps', 60));
+    grid.add(createStack('ammo_545_ps', 20));
+    assert.equal(grid.consume('ammo_545_ps', 70), 70);
+    assert.equal(grid.countOf('ammo_545_ps'), 10);
+    assert.equal(grid.consume('ammo_545_ps', 999), 10);
+    assert.equal(grid.slots.length, 0);
+  });
+
+  test('slotAt maps every covered cell back to its item', () => {
+    const grid = new GridContainer(6, 4);
+    const rifle = createStack('wp_sg545');
+    grid.place(rifle, 1, 1);
+    assert.equal(grid.slotAt(1, 1)?.stack.id, rifle.id);
+    assert.equal(grid.slotAt(4, 2)?.stack.id, rifle.id);
+    assert.equal(grid.slotAt(5, 2), null);
+  });
+});
+
+describe('ItemStack', () => {
+  test('weight includes nested magazines and rounds', () => {
+    const rifle = createStack('wp_sg545');
+    const bare = stackWeight(rifle);
+    const mag = createStack('mag_545_30');
+    loadMagazine(mag, 'ammo_545_ps', 30);
+    rifle.magazine = mag;
+    assert.ok(stackWeight(rifle) > bare, 'a loaded magazine must add weight');
+  });
+
+  test('value falls with wear', () => {
+    const pristine = createStack('wp_sg545');
+    const worn = createStack('wp_sg545');
+    worn.durability = 20;
+    assert.ok(stackValue(worn) < stackValue(pristine));
+  });
+
+  test('secure containers report their contents in weight and value', () => {
+    const box = createStack('sec_small');
+    const emptyValue = stackValue(box);
+    const grid = new GridContainer(2, 2);
+    grid.add(createStack('val_chain'));
+    box.contents = grid.slots;
+    assert.ok(stackValue(box) > emptyValue);
+  });
+});
+
+describe('Inventory', () => {
+  test('an armoured rig and a plate carrier are mutually exclusive', () => {
+    const inv = new Inventory();
+    inv.equip('armor', createStack('arm_plate_steel'));
+    assert.equal(inv.canEquip('rig', createStack('rig_armored')), false);
+    assert.equal(inv.canEquip('rig', createStack('rig_chest')), true);
+  });
+
+  test('derived stats reflect worn gear', () => {
+    const inv = new Inventory();
+    const before = inv.stats.speedFactor;
+    inv.equip('armor', createStack('arm_plate_composite'));
+    assert.ok(inv.stats.speedFactor < before, 'heavy armour must slow you down');
+    assert.ok(inv.stats.weight > 10, 'armour weight must be counted');
+  });
+
+  test('armorFor finds the piece covering a body part', () => {
+    const inv = new Inventory();
+    inv.equip('armor', createStack('arm_plate_steel')); // thorax only
+    assert.ok(inv.armorFor('thorax'));
+    assert.equal(inv.armorFor('leftLeg'), null);
+    assert.equal(inv.armorFor('head'), null);
+  });
+
+  test('destroyed armour stops protecting', () => {
+    const inv = new Inventory();
+    const plate = createStack('arm_plate_steel');
+    plate.durability = 0;
+    inv.equip('armor', plate);
+    assert.equal(inv.armorFor('thorax'), null);
+  });
+
+  test('death strips everything except the secure container', () => {
+    const inv = new Inventory();
+    inv.equip('primary', createStack('wp_sg545'));
+    inv.equip('secure', createStack('sec_small'));
+    inv.equip('backpack', createStack('bp_small'));
+    const secureGrid = inv.gridFor('secure')!;
+    secureGrid.add(createStack('val_chain'));
+
+    const lost = inv.stripOnDeath();
+    assert.ok(lost.length >= 2, 'gear outside the container is lost');
+    assert.ok(inv.equipped.secure, 'the secure container survives');
+    assert.equal(inv.gridFor('secure')!.countOf('val_chain'), 1);
+  });
+});
+
+// ===========================================================================
+// Weapons
+// ===========================================================================
+
+describe('WeaponRuntime', () => {
+  test('feeding cycles the chamber from the magazine', () => {
+    const rifle = createStack('wp_sg545');
+    const mag = createStack('mag_545_30');
+    loadMagazine(mag, 'ammo_545_ps', 3);
+    rifle.magazine = mag;
+
+    assert.equal(totalRounds(rifle), 3);
+    assert.equal(chamberFromMagazine(rifle), true);
+    assert.equal(totalRounds(rifle), 3, 'chambering moves a round, it does not consume it');
+
+    assert.equal(cycleRound(rifle), 'ammo_545_ps');
+    assert.equal(totalRounds(rifle), 2);
+    cycleRound(rifle);
+    cycleRound(rifle);
+    assert.equal(totalRounds(rifle), 0);
+    assert.equal(cycleRound(rifle), null, 'an empty weapon fires nothing');
+  });
+
+  test('magazines refuse the wrong calibre', () => {
+    const mag = createStack('mag_545_30');
+    assert.equal(loadMagazine(mag, 'ammo_9_fmj', 10), 0);
+    assert.equal(loadMagazine(mag, 'ammo_545_ps', 10), 10);
+  });
+
+  test('magazines cannot be overfilled', () => {
+    const mag = createStack('mag_545_30');
+    assert.equal(loadMagazine(mag, 'ammo_545_ps', 100), 30);
+    assert.equal(mag.rounds!.length, 30);
+  });
+
+  test('a suppressor trades loudness for handling', () => {
+    const bare = createStack('wp_sg545');
+    const suppressed = createStack('wp_sg545');
+    suppressed.attachments = { muzzle: createStack('att_suppressor') };
+
+    const a = resolveWeapon(bare);
+    const b = resolveWeapon(suppressed);
+    assert.ok(b.loudness < a.loudness * 0.4, 'a suppressor must be a big cut');
+    assert.equal(b.suppressed, true);
+    assert.ok(b.adsTime > a.adsTime, 'and it must cost handling');
+  });
+
+  test('wear degrades accuracy and introduces malfunctions', () => {
+    const good = createStack('wp_sg545');
+    good.durability = 100;
+    const bad = createStack('wp_sg545');
+    bad.durability = 15;
+
+    const a = resolveWeapon(good);
+    const b = resolveWeapon(bad);
+    assert.ok(b.accuracyMoa > a.accuracyMoa);
+    assert.equal(a.jamChance, 0, 'a serviced weapon should not jam');
+    assert.ok(b.jamChance > 0, 'a neglected weapon should');
+  });
+
+  test('skills improve handling without changing the weapon', () => {
+    const rifle = createStack('wp_sg545');
+    const novice = resolveWeapon(rifle, { gearErgoPenalty: 0, handlingSkill: 0, recoilSkill: 0 });
+    const expert = resolveWeapon(rifle, { gearErgoPenalty: 0, handlingSkill: 1, recoilSkill: 1 });
+    assert.ok(expert.adsTime < novice.adsTime);
+    assert.ok(expert.recoilVertical < novice.recoilVertical);
+  });
+});
+
+// ===========================================================================
+// Health
+// ===========================================================================
+
+describe('HealthSystem', () => {
+  test('a destroyed head is fatal, a destroyed leg is not', () => {
+    const head = new HealthSystem(bus, false);
+    head.applyDamage('head', 999);
+    assert.equal(head.dead, true);
+
+    const leg = new HealthSystem(bus, false);
+    leg.applyDamage('leftLeg', 999);
+    assert.equal(leg.dead, false);
+    assert.equal(leg.parts.leftLeg.blackedOut, true);
+  });
+
+  test('damage to a blacked-out limb carries into the thorax', () => {
+    const h = new HealthSystem(bus, false);
+    h.applyDamage('leftLeg', 999);
+    const before = h.parts.thorax.hp;
+    h.applyDamage('leftLeg', 40);
+    assert.ok(h.parts.thorax.hp < before, 'a dead limb still transmits damage');
+  });
+
+  test('an untreated heavy bleed is lethal within about a minute', () => {
+    const h = new HealthSystem(bus, false);
+    h.applyDamage('leftArm', 5, { heavyBleedChance: 1, roll: () => 0 });
+    assert.equal(h.hasHeavyBleed, true);
+
+    let elapsed = 0;
+    while (!h.dead && elapsed < 300) {
+      h.update(1);
+      elapsed++;
+    }
+    assert.equal(h.dead, true, 'a heavy bleed must eventually kill');
+    assert.ok(elapsed > 20 && elapsed < 120, `expected 20-120 s, got ${elapsed}`);
+  });
+
+  test('a tourniquet stops a heavy bleed, a bandage does not', () => {
+    const h = new HealthSystem(bus, false);
+    h.applyDamage('leftArm', 5, { heavyBleedChance: 1, roll: () => 0 });
+    assert.equal(h.stopBleed(false), false, 'a bandage cannot stop a heavy bleed');
+    assert.equal(h.stopBleed(true), true);
+    assert.equal(h.hasHeavyBleed, false);
+  });
+
+  test('fractures slow you down and painkillers mask it', () => {
+    const h = new HealthSystem(bus, false);
+    const healthy = h.modifiers.speed;
+    h.applyDamage('leftLeg', 5, { fractureChance: 1, roll: () => 0 });
+    const fractured = h.modifiers.speed;
+    assert.ok(fractured < healthy, 'a fracture must cost speed');
+
+    h.applyPainkiller(60);
+    assert.ok(h.modifiers.speed > fractured, 'painkillers should mask the limp');
+    assert.equal(h.hasFracture, true, 'but the bone is still broken');
+  });
+
+  test('healing never revives a destroyed limb, surgery does', () => {
+    const h = new HealthSystem(bus, false);
+    h.applyDamage('leftLeg', 999);
+    assert.equal(h.heal(100, 'leftLeg'), 0);
+    assert.equal(h.performSurgery(0.5), 'leftLeg');
+    assert.equal(h.parts.leftLeg.blackedOut, false);
+    assert.ok(h.parts.leftLeg.hp > 0);
+  });
+
+  test('running out of water eventually kills', () => {
+    const h = new HealthSystem(bus, false);
+    h.hydration = 0;
+    h.energy = 50;
+    for (let i = 0; i < 400; i++) h.update(1);
+    assert.equal(h.dead, true);
+  });
+
+  test('triage healing treats the worst limb first', () => {
+    const h = new HealthSystem(bus, false);
+    h.applyDamage('leftArm', 40);
+    h.applyDamage('rightLeg', 10);
+    const armBefore = h.parts.leftArm.hp;
+    h.heal(20);
+    assert.ok(h.parts.leftArm.hp > armBefore, 'the worst injury is treated first');
+  });
+});
+
+// ===========================================================================
+// Loot and economy
+// ===========================================================================
+
+describe('LootSystem', () => {
+  test('the same seed produces the same containers', () => {
+    const gen = generateMap(MAP_BLUEPRINTS[2], 999);
+    const a = new LootSystem(999);
+    const b = new LootSystem(999);
+    a.populate(gen.lootAnchors, gen.map);
+    b.populate(gen.lootAnchors, gen.map);
+
+    assert.equal(a.containers.length, b.containers.length);
+    for (let i = 0; i < a.containers.length; i++) {
+      const itemsA = a.containers[i].grid.items().map((s) => `${s.defId}:${s.count}`);
+      const itemsB = b.containers[i].grid.items().map((s) => `${s.defId}:${s.count}`);
+      assert.deepEqual(itemsA, itemsB);
+    }
+  });
+
+  test('spawned weapons come with a magazine', () => {
+    const loot = new LootSystem(31337);
+    const rifle = ItemDB.get('wp_ar556');
+    for (let i = 0; i < 20; i++) {
+      const stack = loot.instantiate(rifle, 1, 0.6);
+      assert.ok(stack.magazine, 'a found weapon should be a complete kit');
+      assert.ok((stack.durability ?? 0) > 0 && (stack.durability ?? 0) <= 100);
+    }
+  });
+
+  test('dangerous zones yield better loot on average', () => {
+    const gen = generateMap(MAP_BLUEPRINTS[0], 2024);
+    const safe = new LootSystem(1);
+    const hot = new LootSystem(1);
+    let safeValue = 0;
+    let hotValue = 0;
+    for (let i = 0; i < 120; i++) {
+      const a = safe.createContainer(
+        { ...LOOT_SAMPLE, id: 'supply_crate' }, 4, 4, 0.05,
+      );
+      const b = hot.createContainer({ ...LOOT_SAMPLE, id: 'supply_crate' }, 4, 4, 0.95);
+      for (const s of a.grid.items()) safeValue += stackValue(s);
+      for (const s of b.grid.items()) hotValue += stackValue(s);
+    }
+    assert.ok(hotValue > safeValue, `hot zones should pay more (${hotValue} vs ${safeValue})`);
+    void gen;
+  });
+});
+
+// A minimal table reused by the danger-weighting test above.
+const LOOT_SAMPLE = {
+  id: 'supply_crate',
+  name: 'Testkiste',
+  gridWidth: 4,
+  gridHeight: 4,
+  searchSeconds: 1,
+  sprite: 'supply_crate',
+  minRolls: 3,
+  maxRolls: 3,
+  emptyChance: 0,
+  entries: [{ tag: 'valuable', weight: 1 }],
+};
+
+describe('Progression', () => {
+  test('levels advance with experience', () => {
+    const p = new Progression(bus);
+    assert.equal(p.level, 1);
+    p.addXp(50000, 'test');
+    assert.ok(p.level > 3, `expected several levels, got ${p.level}`);
+  });
+
+  test('skills cap out and produce bounded effects', () => {
+    const p = new Progression(bus);
+    for (let i = 0; i < 400; i++) p.addSkillXp('strength', 500);
+    assert.equal(p.skills.strength.level, 20);
+    assert.equal(p.factor('strength'), 1);
+    assert.ok(p.carryBonusKg > 10 && p.carryBonusKg < 20);
+  });
+
+  test('search time improves but never reaches zero', () => {
+    const p = new Progression(bus);
+    for (let i = 0; i < 400; i++) p.addSkillXp('scavenging', 500);
+    assert.ok(p.searchTimeMultiplier > 0.4 && p.searchTimeMultiplier < 1);
+  });
+});
+
+describe('Hideout', () => {
+  test('upgrades are gated behind the generator', () => {
+    const h = new Hideout(bus);
+    const blocked = h.upgradeBlocker('workshop', 10_000_000, () => true);
+    assert.match(blocked ?? '', /Generator/);
+
+    h.modules.generator.level = 1;
+    assert.equal(h.upgradeBlocker('workshop', 10_000_000, () => true), null);
+  });
+
+  test('missing materials block an upgrade', () => {
+    const h = new Hideout(bus);
+    assert.equal(h.upgradeBlocker('stash', 10_000_000, () => false), 'Material fehlt');
+  });
+
+  test('stash grows with the Lager level', () => {
+    const h = new Hideout(bus);
+    const base = h.stashSize.height;
+    h.modules.stash.level = 2;
+    assert.ok(h.stashSize.height > base);
+  });
+
+  test('construction completes on the clock', () => {
+    const h = new Hideout(bus);
+    h.modules.generator.level = 1;
+    h.startUpgrade('stash');
+    assert.equal(h.modules.stash.level, 0);
+    h.update(100000);
+    assert.equal(h.modules.stash.level, 1);
+  });
+});
+
+describe('QuestSystem', () => {
+  test('prerequisites gate availability', () => {
+    const q = new QuestSystem(bus);
+    q.refreshAvailability(1);
+    assert.equal(q.states.get('q_first_blood')!.status, 'available');
+    assert.equal(q.states.get('q_valuables')!.status, 'locked');
+  });
+
+  test('objectives advance and complete', () => {
+    const q = new QuestSystem(bus);
+    q.refreshAvailability(1);
+    q.accept('q_first_blood');
+    q.advance('killTier', 4, 'scavenger');
+    assert.equal(q.isComplete('q_first_blood'), false, 'extraction is still outstanding');
+    q.advance('extract', 1);
+    assert.equal(q.isComplete('q_first_blood'), true);
+    assert.ok(q.turnIn('q_first_blood'));
+    assert.equal(q.states.get('q_first_blood')!.status, 'complete');
+  });
+
+  test('the wrong tier does not count', () => {
+    const q = new QuestSystem(bus);
+    q.refreshAvailability(1);
+    q.accept('q_first_blood');
+    q.advance('killTier', 4, 'contractor');
+    const state = q.states.get('q_first_blood')!;
+    assert.equal(state.progress.o1 ?? 0, 0);
+  });
+
+  test('death resets raid-scoped objectives but keeps banked progress', () => {
+    const q = new QuestSystem(bus);
+    q.refreshAvailability(1);
+    q.accept('q_first_blood');
+    q.advance('killTier', 3, 'scavenger');
+    q.advance('extract', 1);
+    q.onPlayerDeath();
+    const state = q.states.get('q_first_blood')!;
+    assert.equal(state.progress.o1, 3, 'kills already made are kept');
+    assert.equal(state.progress.o2, 0, 'the extraction requirement resets');
+  });
+});
+
+describe('TraderSystem', () => {
+  test('traders only buy what they deal in', () => {
+    const t = new TraderSystem(5);
+    const rifle = createStack('wp_sg545');
+    const bandage = createStack('med_bandage');
+    assert.ok(t.sellPrice('kessler', rifle) > 0, 'the armourer buys weapons');
+    assert.equal(t.sellPrice('marek', rifle), 0, 'the medic does not');
+    assert.ok(t.sellPrice('marek', bandage) > 0);
+  });
+
+  test('they always buy below reference value', () => {
+    const t = new TraderSystem(5);
+    const rifle = createStack('wp_sg545');
+    assert.ok(t.sellPrice('kessler', rifle) < stackValue(rifle));
+  });
+
+  test('bestBuyer picks the highest offer', () => {
+    const t = new TraderSystem(5);
+    const valuable = createStack('val_chain');
+    const best = t.bestBuyer(valuable);
+    assert.equal(best?.id, 'zoellner', 'the fence pays most for valuables');
+  });
+
+  test('restocking produces affordable, sorted stock', () => {
+    const t = new TraderSystem(5);
+    t.restock('kessler', 1);
+    const offers = t.states.kessler.offers;
+    assert.ok(offers.length > 0);
+    for (let i = 1; i < offers.length; i++) {
+      assert.ok(offers[i].price >= offers[i - 1].price, 'stock should be price-sorted');
+    }
+  });
+
+  test('buying consumes stock and builds reputation', () => {
+    const t = new TraderSystem(5);
+    t.restock('kessler', 1);
+    const before = t.states.kessler.reputation;
+    const quantity = t.states.kessler.offers[0].quantity;
+    const bought = t.buy('kessler', 0);
+    assert.ok(bought);
+    assert.ok(t.states.kessler.reputation >= before);
+    const remaining = t.states.kessler.offers[0]?.quantity ?? 0;
+    assert.ok(remaining === quantity - 1 || quantity === 1);
+  });
+});

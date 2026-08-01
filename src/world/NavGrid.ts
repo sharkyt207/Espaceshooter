@@ -42,6 +42,18 @@ export class NavGrid {
   private readonly cameFrom: Int32Array;
   /** Search generation stamp, avoids clearing the arrays between searches. */
   private readonly visitedStamp: Int32Array;
+  /**
+   * Closed set, stamped the same way.
+   *
+   * Essential, not an optimisation: decrease-key is implemented by re-pushing,
+   * so the heap holds stale duplicates whose ordering no longer matches their
+   * current fScore. Without closing nodes on pop, those duplicates get
+   * re-expanded and can relax their neighbours again, and the search thrashes
+   * until it exhausts its node budget - reporting a perfectly reachable goal
+   * as unreachable. The octile heuristic is consistent for our cost range
+   * (every tile costs at least 1), so closing on first pop is also optimal.
+   */
+  private readonly closedStamp: Int32Array;
   private stamp = 0;
   private readonly heap: Int32Array;
   private heapSize = 0;
@@ -63,7 +75,13 @@ export class NavGrid {
     this.fScore = new Float32Array(n);
     this.cameFrom = new Int32Array(n);
     this.visitedStamp = new Int32Array(n);
-    this.heap = new Int32Array(n);
+    this.closedStamp = new Int32Array(n);
+    // The heap must hold duplicates: this A* implements decrease-key by
+    // re-pushing an improved node rather than repositioning it, so a node can
+    // appear once per incoming edge. Eight-way movement bounds that at 8n.
+    // Sizing it at n silently dropped pushes on a typed array and corrupted
+    // the search, which showed up as unreachable-but-actually-connected goals.
+    this.heap = new Int32Array(n * 8);
     this.flowDist = new Float32Array(n);
     this.flowDir = new Int8Array(n);
     this.bfsQueue = new Int32Array(n);
@@ -118,7 +136,7 @@ export class NavGrid {
    * request cannot stall a frame; on budget exhaustion we return the best
    * partial path found, which keeps AI moving in roughly the right direction.
    */
-  findPath(sx: number, sy: number, tx: number, ty: number, maxNodes = 1800): PathResult {
+  findPath(sx: number, sy: number, tx: number, ty: number, maxNodes = 3000): PathResult {
     const startX = Math.floor(sx);
     const startY = Math.floor(sy);
     let goalX = Math.floor(tx);
@@ -153,6 +171,10 @@ export class NavGrid {
 
     while (this.heapSize > 0 && expanded < maxNodes) {
       const current = this.heapPop();
+      // Stale duplicate left over from a decrease-key: already expanded.
+      if (this.closedStamp[current] === stamp) continue;
+      this.closedStamp[current] = stamp;
+
       if (current === goalIdx) return this.reconstruct(current, tx, ty);
       expanded++;
 
@@ -167,6 +189,7 @@ export class NavGrid {
         const ni = ny * this.width + nx;
         const tileCost = this.cost[ni];
         if (!isFinite(tileCost)) continue;
+        if (this.closedStamp[ni] === stamp) continue;
         // No corner-cutting: a diagonal is only legal when both orthogonal
         // neighbours are open, otherwise AI slides through wall seams.
         if (k >= 4) {
@@ -271,6 +294,10 @@ export class NavGrid {
   // --- binary min-heap keyed on fScore ------------------------------------
 
   private heapPush(idx: number): void {
+    // Defensive: never write past the buffer. Dropping a push degrades the
+    // search to a worse path, whereas an out-of-range write on a typed array
+    // is a no-op that corrupts the heap invariant.
+    if (this.heapSize >= this.heap.length) return;
     let i = this.heapSize++;
     this.heap[i] = idx;
     const f = this.fScore[idx];

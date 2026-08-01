@@ -64,7 +64,49 @@ export class TextureAtlas {
     this.buildGrate(13);
     this.buildGlass(14);
     this.buildTarmac(15);
+
+    // Soften the high-frequency materials.
+    //
+    // The renderer point-samples one texel per screen pixel with no mip
+    // chain, so any texture containing single-texel contrast - speckled
+    // concrete, cracked rock, gravel grain - turns into crawling static at
+    // distance and at grazing angles. A single tileable box blur removes that
+    // frequency band while leaving the material's larger structure intact.
+    // Brick, planking and containers are left sharp: their detail is already
+    // low-frequency and blurring would only muddy the mortar lines.
+    for (const index of [0, 1, 9, 11, 12, 15]) this.blur(index);
+
     for (let i = 0; i < TEX_COUNT; i++) this.finalize(i);
+  }
+
+  /** Tileable 3x3 box blur, preserving alpha. */
+  private blur(index: number): void {
+    const src = this.texels[index];
+    const dst = new Uint32Array(src.length);
+    const S = TEX_SIZE;
+    for (let v = 0; v < S; v++) {
+      for (let u = 0; u < S; u++) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let a = 0;
+        for (let dv = -1; dv <= 1; dv++) {
+          // Wrap so the blur does not introduce a visible seam at the edges.
+          const sv = (v + dv + S) & (S - 1);
+          for (let du = -1; du <= 1; du++) {
+            const su = (u + du + S) & (S - 1);
+            const c = src[sv * S + su];
+            r += c & 0xff;
+            g += (c >> 8) & 0xff;
+            b += (c >> 16) & 0xff;
+            a += (c >>> 24) & 0xff;
+          }
+        }
+        dst[v * S + u] =
+          ((clampByte(a / 9) << 24) | (clampByte(b / 9) << 16) | (clampByte(g / 9) << 8) | clampByte(r / 9)) >>> 0;
+      }
+    }
+    src.set(dst);
   }
 
   /** Records alpha usage and the average colour for LOD/minimap sampling. */
@@ -121,10 +163,11 @@ export class TextureAtlas {
       const stain = fbm(u * 0.08, v * 0.1, 8, 3, 41);
       // Horizontal form lines every 16 texels read as poured sections.
       const form = v % 16 === 0 || v % 16 === 15 ? -0.16 : 0;
-      // Sparse cracks from ridged noise, thresholded so they stay rare.
-      const crack = ridged(u * 0.2, v * 0.2, 16, 3, 77);
-      const crackDark = crack > 0.93 ? -0.42 : 0;
-      const l = 0.62 + grain * 0.2 - stain * 0.16 + form + crackDark;
+      // Sparse cracks from ridged noise. Kept rare and shallow: isolated dark
+      // texels are exactly the frequency this renderer aliases worst.
+      const crack = ridged(u * 0.18, v * 0.18, 16, 2, 77);
+      const crackDark = crack > 0.955 ? -0.3 : 0;
+      const l = 0.62 + grain * 0.15 - stain * 0.16 + form + crackDark;
       return rgba(clampByte(158 * l), clampByte(156 * l), clampByte(150 * l));
     });
   }
@@ -207,22 +250,33 @@ export class TextureAtlas {
     });
   }
 
-  /** Chainlink fence - mostly transparent, diamond wire pattern. */
+  /**
+   * Chainlink fence - mostly transparent, diamond wire pattern.
+   *
+   * The mesh period is deliberately coarse (16 texels rather than 8). A fine
+   * mesh looks correct up close but the software renderer point-samples one
+   * texel per screen pixel, so at distance a fine mesh aliases into a solid
+   * grey blur and the fence stops reading as a fence. Coarse wires stay
+   * legible at every range, which matters because the player has to judge
+   * instantly whether a boundary can be shot through.
+   */
   private buildChainlink(idx: number): void {
+    const PERIOD = 16;
     this.each(idx, (u, v) => {
-      // Two diagonal families of wires form the diamond mesh.
-      const d1 = Math.abs(((u + v) % 8) - 4);
-      const d2 = Math.abs(((u - v + 64) % 8) - 4);
-      const onWire = d1 < 1.1 || d2 < 1.1;
       // Posts every 32 texels give the fence structure at distance.
-      const post = u % 32 < 2;
-      if (post) {
+      if (u % 32 < 2) {
         const l = 0.6 + valueNoise(u, v * 0.4, TEX_SIZE, 3) * 0.2;
         return rgba(clampByte(120 * l), clampByte(126 * l), clampByte(128 * l));
       }
-      if (!onWire) return 0; // fully transparent
+      // A single top rail reads as the fence's frame.
+      if (v < 2) return rgba(112, 118, 120);
+
+      // Two diagonal families of wires form the diamond mesh.
+      const d1 = Math.abs(((u + v) % PERIOD) - PERIOD / 2);
+      const d2 = Math.abs(((u - v + TEX_SIZE * 2) % PERIOD) - PERIOD / 2);
+      if (d1 > 1.3 && d2 > 1.3) return 0; // fully transparent
       const l = 0.75 + valueNoise(u * 2, v * 2, TEX_SIZE, 9) * 0.3;
-      return rgba(clampByte(150 * l), clampByte(156 * l), clampByte(158 * l), 235);
+      return rgba(clampByte(150 * l), clampByte(156 * l), clampByte(158 * l), 210);
     });
   }
 
