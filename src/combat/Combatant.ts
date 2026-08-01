@@ -36,6 +36,13 @@ export interface Combatant {
 
   /** Called when a round connects, before damage is applied. */
   onHit?(attackerId: number, part: BodyPart, damage: number, penetrated: boolean, dirX: number, dirY: number): void;
+
+  /**
+   * Called when a round passes close by without connecting.
+   * This is what drives suppression - being shot at changes behaviour even
+   * when nothing lands, which is most of what a real firefight is.
+   */
+  onNearMiss?(attackerId: number, closeness: number, fromX: number, fromY: number): void;
 }
 
 /**

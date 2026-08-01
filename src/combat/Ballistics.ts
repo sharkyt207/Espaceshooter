@@ -274,7 +274,16 @@ export class BallisticsSystem {
 
       const distSq = pointSegmentDistSq(actor.x, actor.y, x0, y0, x1, y1);
       const r = actor.radius;
-      if (distSq > r * r) continue;
+      if (distSq > r * r) {
+        // Near miss: close enough to hear the round crack past. Feeds
+        // suppression without needing a separate query.
+        const suppressRadius = r + 1.4;
+        if (distSq <= suppressRadius * suppressRadius) {
+          const closeness = 1 - (Math.sqrt(distSq) - r) / 1.4;
+          actor.onNearMiss?.(p.ownerId, closeness, x0, y0);
+        }
+        continue;
+      }
 
       // Parametric position of closest approach, used to order multiple hits
       // and to interpolate the impact height.
