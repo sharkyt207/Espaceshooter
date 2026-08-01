@@ -161,7 +161,13 @@ export class Game {
         // On desktop the mouse is pointer-locked for looking. A locked cursor
         // cannot reach the UI, so every menu has to release it - otherwise the
         // pause screen is visible but completely uninteractable.
-        if (document.pointerLockElement) document.exitPointerLock();
+        if (document.pointerLockElement && document.exitPointerLock) {
+          try {
+            document.exitPointerLock();
+          } catch {
+            // Never let a presentation detail break screen navigation.
+          }
+        }
       }
       this.hud.setVisible(this.state === 'raid' && !top);
     };

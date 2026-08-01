@@ -53,11 +53,20 @@ function boot(): void {
   const game = new Game(app);
 
   // Desktop convenience: click the canvas to capture the mouse for look.
+  //
+  // Best-effort only. Embedded contexts (an iframe without allow-pointer-lock)
+  // reject or throw, and a sandboxed page must stay playable - dragging on the
+  // right half of the screen looks around regardless, on mouse and touch alike.
   app.addEventListener('click', () => {
     if (document.pointerLockElement) return;
-    const canvas = app.querySelector('canvas');
-    if (canvas && !document.querySelector('.screen:not(.hidden)')) {
-      void (canvas as HTMLCanvasElement).requestPointerLock?.();
+    if (document.querySelector('.screen:not(.hidden)')) return;
+    const canvas = app.querySelector('canvas') as HTMLCanvasElement | null;
+    if (!canvas?.requestPointerLock) return;
+    try {
+      const result = canvas.requestPointerLock() as unknown;
+      if (result instanceof Promise) result.catch(() => undefined);
+    } catch {
+      // Pointer lock is unavailable here; the drag-to-look path still works.
     }
   });
 
