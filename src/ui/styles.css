@@ -998,4 +998,11 @@ html, body {
   .btn { min-height: 38px; padding: 8px 14px; font-size: 13px; }
   .menu-actions { gap: 6px; margin-top: 10px; }
   .menu-hero .tagline { display: none; }
+
+  /* The debrief banner is the least informative element on the screen, so it
+     is the first thing to give up height to the figures underneath. */
+  .result-banner { padding: 4px; font-size: clamp(17px, 3.4vw, 26px); letter-spacing: 0.14em; }
+  .result-tile { padding: 6px 9px; }
+  .result-tile .v { font-size: 16px; }
+  .result-grid { gap: 6px; }
 }
