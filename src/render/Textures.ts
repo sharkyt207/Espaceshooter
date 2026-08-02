@@ -29,10 +29,25 @@ function clampByte(v: number): number {
   return v < 0 ? 0 : v > 255 ? 255 : v | 0;
 }
 
+/**
+ * Levels in the mip chain: 64, 32, 16, 8, 4, 2, 1.
+ *
+ * Mipmaps are the fix for the problem the box blur was papering over. A
+ * raycaster point-samples one texel per screen pixel; at distance a wall
+ * covers fewer pixels than it has texels, so which texel each pixel lands on
+ * changes every frame the camera moves - the texture crawls. Pre-filtering the
+ * texture down and picking the level whose texel density matches the pixel
+ * density removes the crawl at its source, and unlike a blanket blur it costs
+ * nothing up close where the detail should be sharp.
+ */
+export const MIP_LEVELS = 7;
+
 export class TextureAtlas {
   readonly size = TEX_SIZE;
-  /** texels[textureIndex] - length size*size, ABGR. */
+  /** texels[textureIndex] - length size*size, ABGR. Level 0 of the mip chain. */
   readonly texels: Uint32Array[] = [];
+  /** mips[textureIndex][level] - level 0 is `texels[textureIndex]`. */
+  readonly mips: Uint32Array[][] = [];
   /** True when the texture contains any transparent texel. */
   readonly hasAlpha: boolean[] = [];
   /** Average colour, used for distant LOD and for the minimap. */
@@ -77,6 +92,61 @@ export class TextureAtlas {
     for (const index of [0, 1, 9, 11, 12, 15]) this.blur(index);
 
     for (let i = 0; i < TEX_COUNT; i++) this.finalize(i);
+    for (let i = 0; i < TEX_COUNT; i++) this.buildMips(i);
+  }
+
+  /**
+   * Build the mip chain by repeated 2x2 box reduction.
+   *
+   * Alpha is averaged along with colour, but colour is *not* premultiplied:
+   * these textures are either fully opaque or fully transparent per texel
+   * (fences, glass), so averaging the two independently keeps a fence's wire
+   * grey rather than letting it bleed towards black as it thins out.
+   */
+  private buildMips(index: number): void {
+    const chain: Uint32Array[] = [this.texels[index]];
+    let size = TEX_SIZE;
+    for (let level = 1; level < MIP_LEVELS && size > 1; level++) {
+      const src = chain[level - 1];
+      const half = size >> 1;
+      const dst = new Uint32Array(half * half);
+      for (let v = 0; v < half; v++) {
+        for (let u = 0; u < half; u++) {
+          let r = 0;
+          let g = 0;
+          let b = 0;
+          let a = 0;
+          for (let dv = 0; dv < 2; dv++) {
+            for (let du = 0; du < 2; du++) {
+              const c = src[(v * 2 + dv) * size + (u * 2 + du)];
+              r += c & 0xff;
+              g += (c >> 8) & 0xff;
+              b += (c >> 16) & 0xff;
+              a += (c >>> 24) & 0xff;
+            }
+          }
+          dst[v * half + u] =
+            ((clampByte(a / 4) << 24) | (clampByte(b / 4) << 16) |
+              (clampByte(g / 4) << 8) | clampByte(r / 4)) >>> 0;
+        }
+      }
+      chain.push(dst);
+      size = half;
+    }
+    this.mips[index] = chain;
+  }
+
+  /**
+   * Pick a mip level from how many texels one screen pixel covers.
+   *
+   * `texelsPerPixel` below 1 is magnification - level 0, and the surface is
+   * simply sharp. Above 1 each doubling costs one level.
+   */
+  static levelFor(texelsPerPixel: number): number {
+    if (texelsPerPixel <= 1) return 0;
+    // log2 without a call: exponent of the float.
+    const level = Math.log2(texelsPerPixel) | 0;
+    return level >= MIP_LEVELS ? MIP_LEVELS - 1 : level;
   }
 
   /** Tileable 3x3 box blur, preserving alpha. */

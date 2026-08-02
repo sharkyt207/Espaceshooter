@@ -392,6 +392,13 @@ export class Raycaster {
       const vTan = camZ / rowDistance;
       const vTan2 = vTan * vTan;
 
+      // Texels per pixel along the row: the world-space step between adjacent
+      // pixels, in texture units. Constant along a row, so the mip level is
+      // chosen once per row rather than per pixel.
+      const floorLevel = TextureAtlas.levelFor(Math.max(Math.abs(stepX), Math.abs(stepY)) * TEX_SIZE);
+      const floorTexSize = TEX_SIZE >> floorLevel;
+      const floorTexMask = floorTexSize - 1;
+
       const rowBase = y * w;
       // Light is sampled every 4 px: it varies per tile, not per pixel.
       let lightMul = 1;
@@ -409,10 +416,10 @@ export class Raycaster {
         const tileFloor = cellX >= 0 && cellY >= 0 && cellX < mapW && cellY < map.height
           ? floorLayer[cellY * mapW + cellX]
           : 0;
-        const tex = atlas.texels[floorTextureFor(tileFloor)];
-        const tu = ((fx - cellX) * TEX_SIZE) | 0;
-        const tv = ((fy - cellY) * TEX_SIZE) | 0;
-        const c = tex[(tv & (TEX_SIZE - 1)) * TEX_SIZE + (tu & (TEX_SIZE - 1))];
+        const tex = atlas.mips[floorTextureFor(tileFloor)][floorLevel];
+        const tu = ((fx - cellX) * floorTexSize) | 0;
+        const tv = ((fy - cellY) * floorTexSize) | 0;
+        const c = tex[(tv & floorTexMask) * floorTexSize + (tu & floorTexMask)];
 
         const r = (c & 0xff) * lightMul + fogRp;
         const g = ((c >> 8) & 0xff) * lightMul + fogGp;
@@ -472,6 +479,10 @@ export class Raycaster {
       const vTan = (1 - camZ) / rowDistance;
       const vTan2 = vTan * vTan;
 
+      const ceilLevel = TextureAtlas.levelFor(Math.max(Math.abs(stepX), Math.abs(stepY)) * TEX_SIZE);
+      const ceilTexSize = TEX_SIZE >> ceilLevel;
+      const ceilTexMask = ceilTexSize - 1;
+
       let lightMul = 1;
       const skyRow = this.skyColor(y, cam, time);
       for (let x = 0; x < w; x++) {
@@ -496,10 +507,10 @@ export class Raycaster {
           lightMul = (l * 0.72 + flashAdd + beam) * exposure * invFog;
         }
 
-        const tex = atlas.texels[TILE_DEFS[ceilTile]?.texture ?? 1];
-        const tu = ((fx - cellX) * TEX_SIZE) | 0;
-        const tv = ((fy - cellY) * TEX_SIZE) | 0;
-        const c = tex[(tv & (TEX_SIZE - 1)) * TEX_SIZE + (tu & (TEX_SIZE - 1))];
+        const tex = atlas.mips[TILE_DEFS[ceilTile]?.texture ?? 1][ceilLevel];
+        const tu = ((fx - cellX) * ceilTexSize) | 0;
+        const tv = ((fy - cellY) * ceilTexSize) | 0;
+        const c = tex[(tv & ceilTexMask) * ceilTexSize + (tu & ceilTexMask)];
 
         const r = (c & 0xff) * lightMul + fogRp;
         const g = ((c >> 8) & 0xff) * lightMul + fogGp;
@@ -689,7 +700,6 @@ export class Raycaster {
     const w = this.width;
     const px = this.pixels;
     const depth = this.depth;
-    const tex = this.atlas.texels[texIndex];
 
     // Project the wall's world-space top and bottom onto the screen.
     const invDist = 1 / dist;
@@ -698,10 +708,18 @@ export class Raycaster {
     const span = yBottom - yTop;
     if (span <= 0) return;
 
+    // One screen pixel covers TEX_SIZE/span texels vertically. That ratio is
+    // exactly what mip selection wants, and it is already being computed for
+    // the texture walk.
+    const level = TextureAtlas.levelFor(TEX_SIZE / span);
+    const tex = this.atlas.mips[texIndex][level];
+    const texSize = TEX_SIZE >> level;
+    const texMax = texSize - 1;
+
     let start = Math.ceil(yTop);
     let end = Math.floor(yBottom);
     if (end < 0 || start >= h) return;
-    const texStep = TEX_SIZE / span;
+    const texStep = texSize / span;
     let texPos = (start - yTop) * texStep;
     if (start < 0) {
       texPos += -start * texStep;
@@ -709,8 +727,8 @@ export class Raycaster {
     }
     if (end >= h) end = h - 1;
 
-    const texU = (u * TEX_SIZE) | 0;
-    const texColBase = texU < 0 ? 0 : texU >= TEX_SIZE ? TEX_SIZE - 1 : texU;
+    const texU = (u * texSize) | 0;
+    const texColBase = texU < 0 ? 0 : texU > texMax ? texMax : texU;
 
     const fog = this.fogAt(dist);
     const invFog = 1 - fog;
@@ -766,7 +784,7 @@ export class Raycaster {
         }
       }
 
-      const c = tex[(tv < 0 ? 0 : tv >= TEX_SIZE ? TEX_SIZE - 1 : tv) * TEX_SIZE + texColBase];
+      const c = tex[(tv < 0 ? 0 : tv > texMax ? texMax : tv) * texSize + texColBase];
       const a = (c >>> 24) & 0xff;
       if (a === 0) continue;
 

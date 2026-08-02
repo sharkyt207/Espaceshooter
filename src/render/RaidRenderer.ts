@@ -8,6 +8,7 @@ import { SpriteRenderer } from './SpriteRenderer';
 import { SpriteLibrary, frameIndexFor, type CharacterSheet, type SpriteFrame } from './Sprites';
 import { TextureAtlas } from './Textures';
 import { PerfGovernor } from '../core/Loop';
+import { PostProcess } from './PostProcess';
 import { detectDeviceTier, initialRenderScale } from '../platform/Platform';
 
 /**
@@ -45,6 +46,7 @@ export class RaidRenderer {
   readonly sprites = new SpriteLibrary();
   readonly raycaster: Raycaster;
   private readonly spriteRenderer = new SpriteRenderer();
+  private readonly post = new PostProcess();
 
   readonly camera: Camera = createCamera();
   /**
@@ -58,6 +60,22 @@ export class RaidRenderer {
 
   /** Fixed render scale from settings; 0 means let the governor decide. */
   fixedScale = 0;
+
+  /**
+   * 0 = no post processing, 1 = tone mapping only, 2 = bloom and tone mapping.
+   * Exposed so the settings screen can trade it against frame rate, which is
+   * the honest trade on a phone: bloom is the most expensive thing here and
+   * also the most visible.
+   */
+  private postQuality = detectDeviceTier() === 'low' ? 1 : 2;
+
+  /** `-1` means "decide from the device", otherwise 0, 1 or 2. */
+  applyPostQuality(level: number): void {
+    const resolved = level >= 0 ? level : (detectDeviceTier() === 'low' ? 1 : 2);
+    this.postQuality = resolved;
+    this.post.settings.bloomStrength = resolved >= 2 ? 0.9 : 0;
+    this.post.settings.toneMapping = resolved >= 1 ? 1 : 0;
+  }
 
   private displayWidth = 0;
   private displayHeight = 0;
@@ -219,6 +237,14 @@ export class RaidRenderer {
       (sx, sy, d) => this.raycaster.beamAt(sx, sy, d, horizon),
     );
     this.raycaster.renderTransparentLayers(cam, horizon, flash);
+
+    // Bloom and tone mapping, on the internal buffer before it is handed to
+    // the canvas. Doing it here rather than over the display costs a quarter
+    // of the pixels and is the last chance to touch linear-ish values before
+    // they are clamped into a bitmap.
+    if (this.postQuality > 0) {
+      this.post.apply(this.raycaster.pixels, this.internalWidth, this.internalHeight);
+    }
 
     // Blit the internal buffer up to the display.
     this.offCtx.putImageData(this.raycaster.imageData, 0, 0);

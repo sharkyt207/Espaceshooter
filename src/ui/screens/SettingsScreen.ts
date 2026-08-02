@@ -66,6 +66,23 @@ export class SettingsScreen implements Screen {
       ),
     );
     content.appendChild(
+      this.choiceRow(
+        'Bildeffekte',
+        'Lichtstreuung und Belichtungskurve. Kostet Bildrate, macht Licht deutlich glaubwürdiger.',
+        [
+          { label: 'Auto', value: -1 },
+          { label: 'Aus', value: 0 },
+          { label: 'Belichtung', value: 1 },
+          { label: 'Voll', value: 2 },
+        ],
+        this.settings.postQuality,
+        (value) => {
+          this.settings.postQuality = value;
+          this.apply();
+        },
+      ),
+    );
+    content.appendChild(
       this.toggleRow('Bildrate anzeigen', 'Blendet Diagnosewerte im Einsatz ein.', this.settings.showFps, (v) => {
         this.settings.showFps = v;
         this.apply();

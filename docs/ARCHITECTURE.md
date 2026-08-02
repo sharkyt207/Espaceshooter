@@ -197,6 +197,30 @@ quadrierten Radius, ganz ohne Trigonometrie. Auf Böden und Decken ist der
 vertikale Anteil pro Zeile konstant; nur auf Wandspalten variiert er pro Pixel,
 dort läuft der Test inline mit einem frühen Ausstieg außerhalb des Kegels.
 
+**Mipmaps** lösen das Flimmern an seiner Wurzel. Ein Raycaster tastet einen
+Texel pro Bildschirmpixel ab; auf Distanz deckt eine Wand weniger Pixel ab als
+sie Texel hat, also wechselt der getroffene Texel bei jeder Kamerabewegung –
+die Textur kriecht. Für jede Textur liegt eine vorgefilterte Kette (64 → 1)
+bereit, und die Stufe ergibt sich direkt aus der Texeldichte, die die
+Zeichenschleife ohnehin berechnet. Anders als ein pauschaler Weichzeichner
+kostet das in der Nähe nichts, wo die Textur scharf sein soll.
+
+**Nachbearbeitung** läuft auf dem internen Puffer, nicht auf der Anzeige –
+ein Viertel der Pixel. Zwei Effekte, beide aus demselben Grund gewählt: sie
+trennen ein berechnetes Bild von einem fotografierten.
+
+- **Belichtungskurve.** Der Renderer addiert Licht (Lichtkarte + Mündungsfeuer
+  + Lampe + Blitz) und schnitt bei 255 ab. Abschneiden ist der Grund, warum
+  helle Flächen wie Farbe aussehen: alles darüber fällt auf denselben Wert
+  zusammen. Eine filmische Kurve rollt stattdessen aus.
+- **Lichtstreuung.** Echte Objektive streuen, und das Auge liest diese
+  Streuung stärker als den Pixelwert selbst – deshalb sieht eine Lampe mit
+  Bloom beleuchtet aus und ohne wie ein hellgraues Rechteck.
+
+Der Bloom-Composite überspringt Blöcke ohne Helligkeit. Bloom ist im
+typischen Bild fast überall null; dieser eine Test pro 4×4-Block ist der
+Unterschied zwischen 27 ms und 3 ms.
+
 Die Präsentation nutzt zwei Zeichenflächen: der Raycaster schreibt in ein
 `ImageData` in interner Auflösung, das skaliert auf die sichtbare Fläche
 übertragen wird; Waffenmodell, Fadenkreuz und Bildschirmeffekte werden danach

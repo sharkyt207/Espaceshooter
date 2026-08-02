@@ -49,6 +49,8 @@ export interface GameSettings {
   haptics: boolean;
   /** The first-run primer has been read once. */
   primerSeen: boolean;
+  /** 0 = off, 1 = tone mapping, 2 = bloom and tone mapping. -1 = by device. */
+  postQuality: number;
 }
 
 export function defaultSettings(): GameSettings {
@@ -62,6 +64,7 @@ export function defaultSettings(): GameSettings {
     toggleAds: true,
     haptics: true,
     primerSeen: false,
+    postQuality: -1,
   };
 }
 

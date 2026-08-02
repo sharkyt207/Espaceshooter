@@ -273,6 +273,7 @@ export class Game {
     this.input.sensitivity = settings.lookSensitivity;
     this.input.invertY = settings.invertY;
     this.renderer.fixedScale = settings.renderScale;
+    this.renderer.applyPostQuality(settings.postQuality);
     this.hud.setDebugVisible(settings.showFps);
     setHapticsEnabled(settings.haptics);
     this.renderer.resize();

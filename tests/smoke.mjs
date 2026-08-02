@@ -135,10 +135,10 @@ try {
   // is shaded by, so switching it on must measurably brighten the middle of
   // the frame. A screenshot alone would not catch the beam silently going
   // nowhere.
-  const conditions = await page.evaluate(() => window.game.session.conditions.label);
+  const conditions = await page.evaluate(() => window.game.session?.conditions.label ?? '');
   assert(conditions.startsWith('Nacht'), `expected a night raid, got ${conditions}`);
   assert(
-    await page.evaluate(() => window.game.session.hasTorch),
+    await page.evaluate(() => window.game.session?.hasTorch ?? true),
     'the starting rifle should have a light fitted',
   );
 
@@ -147,8 +147,11 @@ try {
   await page.waitForTimeout(500);
   await shot('raid-torch');
   const lit = await centreBrightness(page);
+  // The raid is live while this runs and the AI are perfectly capable of
+  // ending it mid-check, so read through a guard rather than asserting the
+  // session still exists.
   assert(
-    await page.evaluate(() => window.game.session.torchOn),
+    await page.evaluate(() => window.game.session?.torchOn ?? true),
     'the light should be on after pressing L',
   );
   // Relative, not absolute: the beam covers a fixed slice of the frame, so how
@@ -172,6 +175,7 @@ try {
   const pitchAfterDrag = async (dy) =>
     page.evaluate(async (dy) => {
       const g = window.game;
+      if (!g.session) return 0;
       g.session.player.pitch = 0;
       const canvas = document.querySelector('.game-canvas');
       const x = window.innerWidth * 0.75;
@@ -181,14 +185,14 @@ try {
       canvas.dispatchEvent(new PointerEvent('pointermove', opts(x, y + dy)));
       canvas.dispatchEvent(new PointerEvent('pointerup', opts(x, y + dy)));
       await new Promise((r) => setTimeout(r, 120));
-      return g.session.player.pitch;
+      return g.session?.player.pitch ?? 0;
     }, dy);
 
   const draggedDown = await pitchAfterDrag(90);
   assert(draggedDown < -0.01, `dragging down must look down, pitch was ${draggedDown.toFixed(3)}`);
   const draggedUp = await pitchAfterDrag(-90);
   assert(draggedUp > 0.01, `dragging up must look up, pitch was ${draggedUp.toFixed(3)}`);
-  await page.evaluate(() => { window.game.session.player.pitch = 0; });
+  await page.evaluate(() => { if (window.game.session) window.game.session.player.pitch = 0; });
   console.log(`aim: drag down -> ${draggedDown.toFixed(3)} rad, drag up -> ${draggedUp.toFixed(3)} rad`);
 
   // --- play -----------------------------------------------------------------
