@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Headless verification of the Unity simulation layer.
+
+    The simulation is deliberately free of UnityEngine references
+    ("noEngineReferences" in its asmdef), which means it is ordinary C# and can
+    be compiled and tested without the Editor. This project globs exactly the
+    same source files Unity compiles, so a green run here is a real statement
+    about the code that ships - not about a copy of it.
+
+    Unity never sees this folder: it lives outside the project's Assets tree.
+
+    Usage:  dotnet test tools/csharp-verify
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <!-- Sources are pulled in explicitly below. -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <RootNamespace>Greyzone.Verify</RootNamespace>
+    <!-- Unity's compiler is stricter about some of these than the default. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsAsErrors>CS0162;CS0168;CS0219</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../unity/Assets/Greyzone/Simulation/**/*.cs" />
+    <Compile Include="../../unity/Assets/Greyzone/Tests/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NUnit is what the Unity Test Framework runs, so the same test files
+         execute unchanged in the Editor's Test Runner. -->
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.5.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.9.0" />
+  </ItemGroup>
+
+</Project>
