@@ -73,6 +73,15 @@ export interface GLFrameParams {
   time: number;
   /** Damage flash and exhaustion, applied in the composite. */
   overlay: [number, number, number, number];
+  /**
+   * Unit vector towards the key light, and how strongly it shapes surfaces.
+   *
+   * The lightmap only knows how much light reaches a tile, never from where.
+   * This supplies the direction, which is what makes a normal map visible at
+   * all - and what stops two walls at right angles from being the same shade.
+   */
+  sunDir: [number, number, number];
+  sunAmount: number;
 }
 
 export class GLWorldRenderer {
@@ -87,6 +96,7 @@ export class GLWorldRenderer {
   private compositeProgram!: Program;
 
   private atlasTexture: WebGLTexture | null = null;
+  private normalTexture: WebGLTexture | null = null;
   private lightmapTexture: WebGLTexture | null = null;
   private spriteTexture: WebGLTexture | null = null;
 
@@ -156,7 +166,7 @@ export class GLWorldRenderer {
     const world = createProgram(gl, WORLD_VS, WORLD_FS, [
       'uViewProj', 'uAtlas', 'uLightmap', 'uMapSize', 'uCamPos', 'uCamForward',
       'uFogColor', 'uFogDensity', 'uViewDistance', 'uExposure', 'uFlash',
-      'uTorch', 'uAlphaCutoff',
+      'uTorch', 'uAlphaCutoff', 'uNormals', 'uSunDir', 'uSunAmount',
     ], 'world');
     const sky = createProgram(gl, SKY_VS, SKY_FS, [
       'uSkyTop', 'uSkyHorizon', 'uHorizonNdc', 'uTime', 'uYaw',
@@ -201,17 +211,23 @@ export class GLWorldRenderer {
    * materials together at distance.
    */
   private uploadAtlas(atlas: TextureAtlas): boolean {
+    this.atlasTexture = this.uploadArray(atlas.mips, atlas.texels.length);
+    this.normalTexture = this.uploadArray(atlas.normals, atlas.texels.length);
+    return this.atlasTexture !== null && this.normalTexture !== null;
+  }
+
+  /** Upload one mip-chain-per-layer set as a 2D texture array. */
+  private uploadArray(chains: Uint32Array[][], layers: number): WebGLTexture | null {
     const gl = this.gl;
     const texture = gl.createTexture();
-    if (!texture) return false;
-    const layers = atlas.texels.length;
+    if (!texture) return null;
 
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
-    const levels = atlas.mips[0]?.length ?? 1;
+    const levels = chains[0]?.length ?? 1;
     gl.texStorage3D(gl.TEXTURE_2D_ARRAY, levels, gl.RGBA8, TEX_SIZE, TEX_SIZE, layers);
 
     for (let layer = 0; layer < layers; layer++) {
-      const chain = atlas.mips[layer];
+      const chain = chains[layer];
       for (let level = 0; level < chain.length; level++) {
         const size = TEX_SIZE >> level;
         gl.texSubImage3D(
@@ -237,8 +253,7 @@ export class GLWorldRenderer {
       );
     }
 
-    this.atlasTexture = texture;
-    return true;
+    return texture;
   }
 
   /**
@@ -293,6 +308,11 @@ export class GLWorldRenderer {
       gl.vertexAttribPointer(2, 1, gl.FLOAT, false, stride, 20);
       gl.enableVertexAttribArray(3);
       gl.vertexAttribPointer(3, 1, gl.FLOAT, false, stride, 24);
+      // Face orientation, and per-corner ambient occlusion.
+      gl.enableVertexAttribArray(4);
+      gl.vertexAttribPointer(4, 1, gl.FLOAT, false, stride, 28);
+      gl.enableVertexAttribArray(5);
+      gl.vertexAttribPointer(5, 1, gl.FLOAT, false, stride, 32);
       gl.bindVertexArray(null);
       return [v, b];
     };
@@ -627,6 +647,11 @@ export class GLWorldRenderer {
     gl.uniform1f(p.u.uFlash, params.flash);
     gl.uniform4f(p.u.uTorch, params.torch[0], params.torch[1], params.torch[2], params.torch[3]);
     gl.uniform1f(p.u.uAlphaCutoff, alphaCutoff);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.normalTexture);
+    gl.uniform1i(p.u.uNormals, 2);
+    gl.uniform3f(p.u.uSunDir, params.sunDir[0], params.sunDir[1], params.sunDir[2]);
+    gl.uniform1f(p.u.uSunAmount, params.sunAmount);
   }
 
   private drawSky(params: GLFrameParams): void {

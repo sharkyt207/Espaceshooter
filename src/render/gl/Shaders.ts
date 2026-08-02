@@ -29,6 +29,8 @@ layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUv;
 layout(location = 2) in float aLayer;
 layout(location = 3) in float aFaceShade;
+layout(location = 4) in float aAxis;
+layout(location = 5) in float aAo;
 
 uniform mat4 uViewProj;
 
@@ -36,12 +38,38 @@ out vec2 vUv;
 out float vLayer;
 out float vFaceShade;
 out vec3 vWorld;
+out vec3 vNormal;
+out vec3 vTangent;
+out float vAo;
+
+/**
+ * The six face orientations, expanded from the index the mesh carries.
+ *
+ * Every face in this world is axis-aligned, so a normal and a tangent are two
+ * lookups rather than two attributes - six floats per vertex saved across a
+ * mesh of some seventy thousand of them.
+ *
+ * The tangent has to follow the same direction the texture's u axis runs, or
+ * the normal map's bumps light from the wrong side. That is why each case is
+ * written out to match how WorldMesh winds that particular face.
+ */
+void axisFrame(float axis, out vec3 n, out vec3 t) {
+  int a = int(axis + 0.5);
+  if (a == 0)      { n = vec3(0.0, 0.0, 1.0);  t = vec3(1.0, 0.0, 0.0); }
+  else if (a == 1) { n = vec3(0.0, 0.0, -1.0); t = vec3(1.0, 0.0, 0.0); }
+  else if (a == 2) { n = vec3(-1.0, 0.0, 0.0); t = vec3(0.0, -1.0, 0.0); }
+  else if (a == 3) { n = vec3(1.0, 0.0, 0.0);  t = vec3(0.0, 1.0, 0.0); }
+  else if (a == 4) { n = vec3(0.0, -1.0, 0.0); t = vec3(1.0, 0.0, 0.0); }
+  else             { n = vec3(0.0, 1.0, 0.0);  t = vec3(-1.0, 0.0, 0.0); }
+}
 
 void main() {
   vUv = aUv;
   vLayer = aLayer;
   vFaceShade = aFaceShade;
   vWorld = aPos;
+  vAo = aAo;
+  axisFrame(aAxis, vNormal, vTangent);
   gl_Position = uViewProj * vec4(aPos, 1.0);
 }
 `;
@@ -53,11 +81,20 @@ in vec2 vUv;
 in float vLayer;
 in float vFaceShade;
 in vec3 vWorld;
+in vec3 vNormal;
+in vec3 vTangent;
+in float vAo;
 
 uniform sampler2DArray uAtlas;
+/** Tangent-space normals, same layers and mip layout as the atlas. */
+uniform sampler2DArray uNormals;
 /** Baked lighting, one texel per tile, sampled bilinearly. */
 uniform sampler2D uLightmap;
 uniform vec2 uMapSize;
+
+/** Direction the key light comes *from*, and how much of the light it is. */
+uniform vec3 uSunDir;
+uniform float uSunAmount;
 
 uniform vec3 uCamPos;
 uniform vec3 uCamForward;
@@ -82,6 +119,18 @@ void main() {
   vec4 texel = texture(uAtlas, vec3(vUv, vLayer));
   if (texel.a < uAlphaCutoff) discard;
 
+  // --- surface normal ----------------------------------------------------
+  //
+  // The tangent frame is rebuilt per fragment from the interpolated face
+  // vectors. They are constant across a face, so nothing is lost by
+  // interpolating them, and this keeps the vertex format down to one float for
+  // the orientation.
+  vec3 faceN = normalize(vNormal);
+  vec3 faceT = normalize(vTangent);
+  vec3 faceB = cross(faceN, faceT);
+  vec3 tn = texture(uNormals, vec3(vUv, vLayer)).xyz * 2.0 - 1.0;
+  vec3 N = normalize(faceT * tn.x + faceB * tn.y + faceN * tn.z);
+
   // --- baked light -------------------------------------------------------
   //
   // Sampled bilinearly across tile centres, which is the single most visible
@@ -104,12 +153,42 @@ void main() {
     // Near ramp so the beam does not light the player's own feet.
     float near = clamp(dist, 0.0, 1.0);
     torch = uTorch.x * cone * falloff * falloff * near;
+    // The beam comes from the camera, so -dir points back at the light.
+    // Without this the torch flattens every surface it touches, which is the
+    // opposite of what a hand light does: it is the one light in this scene
+    // whose direction the player controls, and raking it across a brick wall
+    // should show the courses.
+    torch *= mix(0.35, 1.0, max(dot(N, -dir), 0.0));
   }
 
   // --- transient flash ---------------------------------------------------
   float flash = uFlash > 0.0 ? uFlash / (1.0 + dist * dist * 0.09) : 0.0;
 
-  float light = (baked + torch + flash) * uExposure * vFaceShade;
+  // --- directional key ---------------------------------------------------
+  //
+  // The baked lightmap is ambient: it says how much light reaches a tile, not
+  // where from. Ambient light lands identically on every facing, so on its own
+  // a normal map changes nothing at all - the bumps are there and invisible.
+  // This is the term that makes them show.
+  //
+  // Wrapped rather than clamped at zero. A surface turned away from the sun is
+  // still lit by the sky, and a hard terminator across a wall reads as a bug
+  // rather than as shadow.
+  float ndl = dot(N, uSunDir);
+  float key = ndl * 0.5 + 0.5;
+  // Centred on 1 so this adds shape without changing overall exposure - which
+  // also keeps the two renderers comparable in brightness.
+  float directional = 1.0 + uSunAmount * (key - 0.5) * 1.25;
+
+  // Occlusion is a statement about ambient light, so it applies in full to the
+  // baked term and only partly to the torch and the flash: a muzzle flash does
+  // reach into a corner, it just does not fill it.
+  float ambientOcclusion = vAo;
+  float directOcclusion = mix(0.65, 1.0, vAo);
+
+  float light =
+    (baked * directional * ambientOcclusion + (torch + flash) * directOcclusion) *
+    uExposure * vFaceShade;
 
   vec3 color = texel.rgb * light;
 

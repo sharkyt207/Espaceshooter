@@ -446,6 +446,8 @@ export class RaidRenderer {
       torch: [torchRadius > 0 ? 0.95 : 0, torchRadius * 1.5, inner, outer],
       time: session.elapsed,
       overlay: [0.59, 0.08, 0.06, this.damageFlash * 0.32],
+      sunDir: cond.sunDir,
+      sunAmount: cond.sunAmount,
     });
 
     // Clear the overlay so the world is visible through it.

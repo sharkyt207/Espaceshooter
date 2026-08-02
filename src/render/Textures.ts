@@ -42,12 +42,60 @@ function clampByte(v: number): number {
  */
 export const MIP_LEVELS = 7;
 
+/**
+ * How much relief each material gets, indexed the same as the textures.
+ *
+ * Tuned by what the luminance in each one actually means. Corrugated metal and
+ * brick get the most: their light and dark bands really are ridges and mortar
+ * courses. Gravel, rubble and rock get a moderate amount - the grain is real
+ * relief but tiny. Water, glass and windows get none, because there is nothing
+ * there to catch a light, and painted surfaces like containers and doors get
+ * little, since their dark areas are paint and rust rather than dents.
+ */
+const RELIEF = [
+  2.0, // 0 gravel
+  1.4, // 1 concrete
+  3.0, // 2 brick
+  3.6, // 3 corrugated metal
+  2.6, // 4 planks
+  1.0, // 5 container - mostly painted panel
+  0.0, // 6 chainlink - alpha cutout, the wire is geometry not relief
+  0.0, // 7 window
+  1.2, // 8 door
+  2.4, // 9 rubble
+  1.8, // 10 crate
+  2.2, // 11 rock
+  0.0, // 12 water - handled by the surface, not by a normal map
+  1.6, // 13 grate
+  0.0, // 14 glass
+  1.2, // 15 tarmac
+];
+
 export class TextureAtlas {
   readonly size = TEX_SIZE;
   /** texels[textureIndex] - length size*size, ABGR. Level 0 of the mip chain. */
   readonly texels: Uint32Array[] = [];
   /** mips[textureIndex][level] - level 0 is `texels[textureIndex]`. */
   readonly mips: Uint32Array[][] = [];
+  /**
+   * Tangent-space normal maps, one per texture, same mip layout as `mips`.
+   *
+   * Packed as ABGR like everything else here: r/g/b hold x/y/z remapped from
+   * [-1,1] to [0,255], alpha is unused.
+   *
+   * Derived from each material's own luminance rather than authored
+   * separately. That is an approximation - it assumes bright means raised -
+   * but for this set of materials the assumption is close to true by
+   * construction: mortar lines are drawn darker than brick, plank gaps darker
+   * than plank, corrugated ridges brighter than troughs. The one place it
+   * misreads is paint and rust, where a dark patch is a colour rather than a
+   * dent, and the strength is dialled back per material to keep that from
+   * turning a stain into a crater.
+   *
+   * Only the GPU path uses these. The software renderer cannot afford a
+   * per-pixel dot product.
+   */
+  readonly normals: Uint32Array[][] = [];
   /** True when the texture contains any transparent texel. */
   readonly hasAlpha: boolean[] = [];
   /** Average colour, used for distant LOD and for the minimap. */
@@ -93,6 +141,92 @@ export class TextureAtlas {
 
     for (let i = 0; i < TEX_COUNT; i++) this.finalize(i);
     for (let i = 0; i < TEX_COUNT; i++) this.buildMips(i);
+    for (let i = 0; i < TEX_COUNT; i++) this.buildNormals(i, RELIEF[i] ?? 1);
+  }
+
+  /**
+   * Derive a tangent-space normal map from the texture's own luminance.
+   *
+   * Central differences rather than a Sobel kernel. Sobel's extra row of
+   * smoothing is there to survive photographic noise; these textures are
+   * generated, their noise is deliberate surface grain, and blurring it away
+   * is exactly the detail worth keeping. Sampling wraps, because every one of
+   * these tiles.
+   *
+   * `strength` scales the gradient before it becomes a slope: a value of 1
+   * gives roughly a 45 degree face where luminance changes by half across one
+   * texel, which is far too much for a stained floor and about right for
+   * corrugated metal.
+   */
+  private buildNormals(index: number, strength: number): void {
+    const S = TEX_SIZE;
+    const src = this.texels[index];
+    const height = new Float32Array(S * S);
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      height[i] =
+        ((c & 0xff) * 0.299 + ((c >> 8) & 0xff) * 0.587 + ((c >> 16) & 0xff) * 0.114) / 255;
+    }
+
+    const level0 = new Uint32Array(S * S);
+    for (let v = 0; v < S; v++) {
+      const up = ((v - 1 + S) & (S - 1)) * S;
+      const down = ((v + 1) & (S - 1)) * S;
+      const row = v * S;
+      for (let u = 0; u < S; u++) {
+        const left = (u - 1 + S) & (S - 1);
+        const right = (u + 1) & (S - 1);
+        // The gradient points uphill; the surface normal tilts the other way.
+        const dx = (height[row + right] - height[row + left]) * strength;
+        const dy = (height[down + u] - height[up + u]) * strength;
+        const nx = -dx;
+        const ny = -dy;
+        const nz = 1;
+        const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+        level0[row + u] =
+          ((255 << 24) |
+            (clampByte((nz * inv) * 127.5 + 127.5) << 16) |
+            (clampByte((ny * inv) * 127.5 + 127.5) << 8) |
+            clampByte((nx * inv) * 127.5 + 127.5)) >>> 0;
+      }
+    }
+
+    // Mip the normals by the same box reduction as colour. Averaging unit
+    // vectors and renormalising in the shader is not strictly correct - the
+    // right answer shortens the average to encode lost variance - but the
+    // practical effect is what is wanted anyway: detail flattens with distance
+    // instead of aliasing into sparkle.
+    const chain: Uint32Array[] = [level0];
+    let size = S;
+    for (let level = 1; level < MIP_LEVELS && size > 1; level++) {
+      const prev = chain[level - 1];
+      const half = size >> 1;
+      const dst = new Uint32Array(half * half);
+      for (let v = 0; v < half; v++) {
+        for (let u = 0; u < half; u++) {
+          let x = 0;
+          let y = 0;
+          let z = 0;
+          for (let dv = 0; dv < 2; dv++) {
+            for (let du = 0; du < 2; du++) {
+              const c = prev[(v * 2 + dv) * size + (u * 2 + du)];
+              x += (c & 0xff) - 127.5;
+              y += ((c >> 8) & 0xff) - 127.5;
+              z += ((c >> 16) & 0xff) - 127.5;
+            }
+          }
+          const len = Math.sqrt(x * x + y * y + z * z) || 1;
+          dst[v * half + u] =
+            ((255 << 24) |
+              (clampByte((z / len) * 127.5 + 127.5) << 16) |
+              (clampByte((y / len) * 127.5 + 127.5) << 8) |
+              clampByte((x / len) * 127.5 + 127.5)) >>> 0;
+        }
+      }
+      chain.push(dst);
+      size = half;
+    }
+    this.normals[index] = chain;
   }
 
   /**

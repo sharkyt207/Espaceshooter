@@ -11,6 +11,7 @@ import { hasLineOfSight, walkSegment } from '../src/world/Raycast';
 import { circleFits, moveCircle } from '../src/world/Physics';
 import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
+import { AXIS_UP, AXIS_WEST, buildWorldMesh, FLOATS_PER_VERTEX } from '../src/render/gl/WorldMesh';
 import { MAP_BLUEPRINTS } from '../src/data/MapData';
 import { ItemDB } from '../src/data/ItemDatabase';
 import { GridContainer } from '../src/inventory/GridContainer';
@@ -1040,5 +1041,88 @@ describe('Perception', () => {
     updateVision(lit, profile, observer(1), spot, map, 0.5, 0, 0, 1);
 
     assert.ok(lit.level > shadowed.level * 1.5, 'the same crouched target is far more conspicuous');
+  });
+});
+
+describe('WorldMesh', () => {
+  /** A patch of open floor with one solid block in the middle. */
+  const blockMap = (): TileMap => {
+    const map = new TileMap(12, 12);
+    map.tiles.fill(Tile.Floor);
+    map.tiles[6 * 12 + 6] = Tile.Concrete;
+    return map;
+  };
+
+  /** Read one vertex's attributes out of the interleaved buffer. */
+  const vertexAt = (data: Float32Array, i: number) => ({
+    x: data[i * FLOATS_PER_VERTEX],
+    y: data[i * FLOATS_PER_VERTEX + 1],
+    z: data[i * FLOATS_PER_VERTEX + 2],
+    axis: data[i * FLOATS_PER_VERTEX + 7],
+    ao: data[i * FLOATS_PER_VERTEX + 8],
+  });
+
+  test('every vertex carries a face orientation the shader knows', () => {
+    const mesh = buildWorldMesh(blockMap());
+    assert.ok(mesh.opaqueCount > 0, 'the mesh should not be empty');
+    for (let i = 0; i < mesh.opaqueCount; i++) {
+      const axis = vertexAt(mesh.opaque, i).axis;
+      assert.ok(
+        Number.isInteger(axis) && axis >= 0 && axis <= 5,
+        `vertex ${i} has axis ${axis}, which is not one of the six orientations`,
+      );
+    }
+  });
+
+  test('floor corners touching a wall are occluded, open floor is not', () => {
+    const mesh = buildWorldMesh(blockMap());
+
+    // Every floor vertex, grouped by the grid point it sits on.
+    const aoAt = new Map<string, number>();
+    for (let i = 0; i < mesh.opaqueCount; i++) {
+      const v = vertexAt(mesh.opaque, i);
+      if (v.axis !== AXIS_UP || v.z !== 0) continue;
+      const key = `${v.x},${v.y}`;
+      // A grid point is shared by up to four floor tiles; keep the darkest,
+      // which is the one facing the obstruction.
+      aoAt.set(key, Math.min(aoAt.get(key) ?? 1, v.ao));
+    }
+
+    // The four grid points on the block's own footprint are the ones its
+    // neighbours' floors share with it.
+    assert.ok(aoAt.get('6,6')! < 0.95, 'the floor corner against the block should be darkened');
+    assert.ok(aoAt.get('7,7')! < 0.95, 'and so should the opposite one');
+    // Well clear of it, nothing occludes anything.
+    assert.equal(aoAt.get('2,2'), 1, 'open floor should be fully lit');
+    assert.equal(aoAt.get('10,3'), 1, 'and so should floor on the other side');
+  });
+
+  test('a wall is darkest where it meets the ground', () => {
+    const mesh = buildWorldMesh(blockMap());
+
+    let lowest = 1;
+    let highest = 0;
+    for (let i = 0; i < mesh.opaqueCount; i++) {
+      const v = vertexAt(mesh.opaque, i);
+      // The four side faces of the block.
+      if (v.axis < AXIS_WEST) continue;
+      if (v.z === 0) lowest = Math.min(lowest, v.ao);
+      else highest = Math.max(highest, v.ao);
+    }
+
+    assert.ok(lowest < 0.8, `the base of a wall should be occluded, got ${lowest}`);
+    assert.ok(highest > 0.95, `the top should not be, got ${highest}`);
+    assert.ok(highest > lowest, 'and the contact shadow has to run the right way up');
+  });
+
+  test('ambient occlusion never goes negative or above unity', () => {
+    const map = generateMap(MAP_BLUEPRINTS[0], 4242).map;
+    const mesh = buildWorldMesh(map);
+    for (const data of [mesh.opaque, mesh.transparent]) {
+      for (let i = 0; i < data.length / FLOATS_PER_VERTEX; i++) {
+        const ao = vertexAt(data, i).ao;
+        assert.ok(ao > 0 && ao <= 1, `vertex ${i} has an out-of-range occlusion of ${ao}`);
+      }
+    }
   });
 });

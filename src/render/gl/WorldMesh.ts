@@ -26,8 +26,22 @@ import { floorTextureFor } from '../Textures';
  * the difference between roughly 40 000 triangles and 6 000.
  */
 
-/** Floats per vertex: position 3, uv 2, layer 1, shade 1. */
-export const FLOATS_PER_VERTEX = 7;
+/** Floats per vertex: position 3, uv 2, layer 1, shade 1, axis 1, AO 1. */
+export const FLOATS_PER_VERTEX = 9;
+
+/**
+ * Which way a face points, so the fragment shader can build a tangent frame
+ * without carrying a normal and a tangent per vertex.
+ *
+ * There are only six possible orientations in a grid this rigid, so an index
+ * costs one float where a normal plus tangent costs six.
+ */
+export const AXIS_UP = 0;
+export const AXIS_DOWN = 1;
+export const AXIS_WEST = 2;
+export const AXIS_EAST = 3;
+export const AXIS_SOUTH = 4;
+export const AXIS_NORTH = 5;
 
 export interface MeshData {
   /** Interleaved vertex data for opaque geometry. */
@@ -62,6 +76,38 @@ export function buildWorldMesh(map: TileMap): MeshData {
     return def.wall ? def.height / METERS_PER_TILE : 0;
   };
 
+  /** Does anything at this tile stand tall enough to occlude at height `z`? */
+  const blocksAt = (x: number, y: number, z: number): boolean => heightOf(x, y) > z + 0.05;
+
+  /**
+   * Ambient occlusion at one corner of a horizontal face.
+   *
+   * `gx`/`gy` is the grid point the corner sits on, and the four tiles meeting
+   * there are the ones that can shade it. The tile owning the face is not one
+   * of them - a floor is not occluded by its own emptiness - so the other
+   * three are counted, with the diagonal weighted less because it only touches
+   * the corner along an edge.
+   *
+   * This is where the grounding comes from. Baked light varies per tile, which
+   * is far too coarse to darken the inside of a corner, and without that
+   * darkening every box looks like it is hovering a few centimetres above the
+   * floor.
+   */
+  const cornerAo = (gx: number, gy: number, ownX: number, ownY: number, z: number): number => {
+    let occlusion = 0;
+    for (const [tx, ty] of [
+      [gx - 1, gy - 1], [gx, gy - 1], [gx - 1, gy], [gx, gy],
+    ] as const) {
+      if (tx === ownX && ty === ownY) continue;
+      if (!blocksAt(tx, ty, z)) continue;
+      // A tile sharing an edge with the owner shades the corner more than one
+      // touching it only diagonally.
+      const diagonal = tx !== ownX && ty !== ownY;
+      occlusion += diagonal ? 0.18 : 0.3;
+    }
+    return Math.max(0.35, 1 - occlusion);
+  };
+
   const isSeeThrough = (tile: number): boolean => {
     const def = TILE_DEFS[tile];
     return def.wall && !def.opaque;
@@ -78,10 +124,18 @@ export function buildWorldMesh(map: TileMap): MeshData {
         const floorLayer = floorTextureFor(map.floor[index]);
         // Water sits fractionally lower so a pier reads as standing above it.
         const z = map.floor[index] === Tile.Water ? -0.03 : 0;
+        // AO per corner, in the same order the corners are pushed. This is
+        // what draws the dark seam where a wall meets the ground.
         pushQuad(
           opaque,
           x, y, z, x + 1, y, z, x + 1, y + 1, z, x, y + 1, z,
-          floorLayer, SHADE_FLOOR,
+          floorLayer, SHADE_FLOOR, AXIS_UP,
+          [
+            cornerAo(x, y, x, y, z),
+            cornerAo(x + 1, y, x, y, z),
+            cornerAo(x + 1, y + 1, x, y, z),
+            cornerAo(x, y + 1, x, y, z),
+          ],
         );
 
         // --- ceiling -------------------------------------------------------
@@ -92,7 +146,7 @@ export function buildWorldMesh(map: TileMap): MeshData {
           pushQuad(
             opaque,
             x, y + 1, 1, x + 1, y + 1, 1, x + 1, y, 1, x, y, 1,
-            layer, SHADE_CEILING,
+            layer, SHADE_CEILING, AXIS_DOWN,
           );
         }
         continue;
@@ -105,7 +159,16 @@ export function buildWorldMesh(map: TileMap): MeshData {
 
       // Top face, wherever the wall does not reach the ceiling.
       if (h < 1 || map.ceiling[index] === 0) {
-        pushQuad(target, x, y, h, x + 1, y, h, x + 1, y + 1, h, x, y + 1, h, layer, SHADE_TOP);
+        pushQuad(
+          target, x, y, h, x + 1, y, h, x + 1, y + 1, h, x, y + 1, h,
+          layer, SHADE_TOP, AXIS_UP,
+          [
+            cornerAo(x, y, x, y, h),
+            cornerAo(x + 1, y, x, y, h),
+            cornerAo(x + 1, y + 1, x, y, h),
+            cornerAo(x, y + 1, x, y, h),
+          ],
+        );
       }
 
       // Side faces, only where the neighbour is lower. A face buried inside a
@@ -119,21 +182,78 @@ export function buildWorldMesh(map: TileMap): MeshData {
       // material on a crate and on a wall would not line up where they meet.
       const vAt = (z: number): number => 1 - z / h;
 
+      // AO for a vertical face. The first two corners of each quad are the
+      // lower pair and the last two the upper pair, which is why `base` is
+      // true for the first two: a wall is darkest where it meets the ground,
+      // and that contact shadow is most of what stops a building from looking
+      // like a texture pasted onto the air.
+      //
+      // `ax`/`ay` steps from the tile in front of the face towards one end of
+      // it. If that diagonal is solid the face is looking into an inside
+      // corner, which is the other place light does not reach.
+      const sideAo = (
+        ox: number, oy: number, ax: number, ay: number, z: number, base: boolean,
+      ): number => {
+        let occlusion = base ? 0.26 : 0;
+        if (blocksAt(ox + ax, oy + ay, z)) occlusion += 0.28;
+        return Math.max(0.4, 1 - occlusion);
+      };
+
       const west = heightOf(x - 1, y);
       if (west < h) {
-        pushQuad(target, x, y + 1, west, x, y, west, x, y, h, x, y + 1, h, layer, SHADE_EAST_WEST, 0, vAt(west));
+        pushQuad(
+          target, x, y + 1, west, x, y, west, x, y, h, x, y + 1, h,
+          layer, SHADE_EAST_WEST, AXIS_WEST,
+          [
+            sideAo(x - 1, y, 0, 1, west, true),
+            sideAo(x - 1, y, 0, -1, west, true),
+            sideAo(x - 1, y, 0, -1, h, false),
+            sideAo(x - 1, y, 0, 1, h, false),
+          ],
+          0, vAt(west),
+        );
       }
       const east = heightOf(x + 1, y);
       if (east < h) {
-        pushQuad(target, x + 1, y, east, x + 1, y + 1, east, x + 1, y + 1, h, x + 1, y, h, layer, SHADE_EAST_WEST, 0, vAt(east));
+        pushQuad(
+          target, x + 1, y, east, x + 1, y + 1, east, x + 1, y + 1, h, x + 1, y, h,
+          layer, SHADE_EAST_WEST, AXIS_EAST,
+          [
+            sideAo(x + 1, y, 0, -1, east, true),
+            sideAo(x + 1, y, 0, 1, east, true),
+            sideAo(x + 1, y, 0, 1, h, false),
+            sideAo(x + 1, y, 0, -1, h, false),
+          ],
+          0, vAt(east),
+        );
       }
       const south = heightOf(x, y - 1);
       if (south < h) {
-        pushQuad(target, x, y, south, x + 1, y, south, x + 1, y, h, x, y, h, layer, SHADE_NORTH_SOUTH, 0, vAt(south));
+        pushQuad(
+          target, x, y, south, x + 1, y, south, x + 1, y, h, x, y, h,
+          layer, SHADE_NORTH_SOUTH, AXIS_SOUTH,
+          [
+            sideAo(x, y - 1, -1, 0, south, true),
+            sideAo(x, y - 1, 1, 0, south, true),
+            sideAo(x, y - 1, 1, 0, h, false),
+            sideAo(x, y - 1, -1, 0, h, false),
+          ],
+          0, vAt(south),
+        );
       }
       const north = heightOf(x, y + 1);
       if (north < h) {
-        pushQuad(target, x + 1, y + 1, north, x, y + 1, north, x, y + 1, h, x + 1, y + 1, h, layer, SHADE_NORTH_SOUTH, 0, vAt(north));
+        pushQuad(
+          target, x + 1, y + 1, north, x, y + 1, north, x, y + 1, h, x + 1, y + 1, h,
+          layer, SHADE_NORTH_SOUTH, AXIS_NORTH,
+          [
+            sideAo(x, y + 1, 1, 0, north, true),
+            sideAo(x, y + 1, -1, 0, north, true),
+            sideAo(x, y + 1, -1, 0, h, false),
+            sideAo(x, y + 1, 1, 0, h, false),
+          ],
+          0, vAt(north),
+        );
       }
     }
   }
@@ -154,6 +274,8 @@ export function buildWorldMesh(map: TileMap): MeshData {
  * otherwise a half-height face would stretch the whole texture over half the
  * wall and mortar lines would not line up between neighbouring tiles.
  */
+const NO_AO: readonly [number, number, number, number] = [1, 1, 1, 1];
+
 function pushQuad(
   out: number[],
   ax: number, ay: number, az: number,
@@ -162,6 +284,8 @@ function pushQuad(
   dx: number, dy: number, dz: number,
   layer: number,
   shade: number,
+  axis: number,
+  ao: readonly number[] = NO_AO,
   v0 = 0,
   v1 = 1,
 ): void {
@@ -170,13 +294,13 @@ function pushQuad(
   const u0 = 0;
   const u1 = 1;
 
-  pushVertex(out, ax, ay, az, u0, v1, layer, shade);
-  pushVertex(out, bx, by, bz, u1, v1, layer, shade);
-  pushVertex(out, cx, cy, cz, u1, v0, layer, shade);
+  pushVertex(out, ax, ay, az, u0, v1, layer, shade, axis, ao[0]);
+  pushVertex(out, bx, by, bz, u1, v1, layer, shade, axis, ao[1]);
+  pushVertex(out, cx, cy, cz, u1, v0, layer, shade, axis, ao[2]);
 
-  pushVertex(out, ax, ay, az, u0, v1, layer, shade);
-  pushVertex(out, cx, cy, cz, u1, v0, layer, shade);
-  pushVertex(out, dx, dy, dz, u0, v0, layer, shade);
+  pushVertex(out, ax, ay, az, u0, v1, layer, shade, axis, ao[0]);
+  pushVertex(out, cx, cy, cz, u1, v0, layer, shade, axis, ao[2]);
+  pushVertex(out, dx, dy, dz, u0, v0, layer, shade, axis, ao[3]);
 }
 
 function pushVertex(
@@ -185,6 +309,8 @@ function pushVertex(
   u: number, v: number,
   layer: number,
   shade: number,
+  axis: number,
+  ao: number,
 ): void {
-  out.push(x, y, z, u, v, layer, shade);
+  out.push(x, y, z, u, v, layer, shade, axis, ao);
 }

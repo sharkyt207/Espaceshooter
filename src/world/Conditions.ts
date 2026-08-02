@@ -97,6 +97,46 @@ export interface RaidConditions {
   thunder: boolean;
   /** True when a weapon light is worth the risk of carrying one. */
   darkEnoughForLight: boolean;
+  /**
+   * Where the key light comes from, as a unit vector in world space, and how
+   * directional the light is at all.
+   *
+   * The lightmap answers "how much light reaches this tile"; this answers
+   * "from which way", which the baked term cannot express and which surface
+   * detail needs in order to be visible.
+   *
+   * `sunAmount` is how much of the light arrives as a beam rather than from
+   * the whole sky. It is near zero under overcast and fog - which is correct
+   * and is why those conditions look flat - and highest at dawn and dusk, when
+   * the light rakes across surfaces instead of falling straight down.
+   */
+  sunDir: [number, number, number];
+  sunAmount: number;
+}
+
+/**
+ * The sun's direction and strength for a time of day.
+ *
+ * Azimuth is arbitrary but fixed per time of day rather than random: a
+ * consistent light direction is most of what lets a player read the shape of a
+ * building at a glance, and rerolling it per raid would throw that away for no
+ * gain. Elevation carries the actual information - a low sun at dawn and dusk
+ * rakes across walls, a high midday sun flattens them, and at night the "key"
+ * is the moon, weak and steep.
+ */
+function sunFor(time: TimeOfDayId): { dir: [number, number, number]; amount: number } {
+  const table: Record<TimeOfDayId, { azimuth: number; elevation: number; amount: number }> = {
+    dawn: { azimuth: 0.6, elevation: 0.22, amount: 0.85 },
+    day: { azimuth: 2.1, elevation: 1.05, amount: 0.6 },
+    dusk: { azimuth: 3.6, elevation: 0.18, amount: 0.8 },
+    night: { azimuth: 4.4, elevation: 0.75, amount: 0.35 },
+  };
+  const s = table[time];
+  const c = Math.cos(s.elevation);
+  return {
+    dir: [Math.cos(s.azimuth) * c, Math.sin(s.azimuth) * c, Math.sin(s.elevation)],
+    amount: s.amount,
+  };
 }
 
 // ===========================================================================
@@ -282,6 +322,7 @@ export function mixColor(a: number, b: number, t: number): number {
 export function makeConditions(time: TimeOfDayId, weather: WeatherId): RaidConditions {
   const t = timeProfile(time);
   const w = weatherProfile(weather);
+  const sun = sunFor(t.id);
 
   const ambientScale = t.ambientScale * w.ambientScale;
 
@@ -309,6 +350,12 @@ export function makeConditions(time: TimeOfDayId, weather: WeatherId): RaidCondi
     thunder: w.thunder,
     // Below roughly a third of daylight, unlit interiors stop being readable.
     darkEnoughForLight: ambientScale < 0.55,
+    sunDir: sun.dir,
+    // Cloud, fog and rain scatter the beam into the whole sky. `w.tint` is
+    // already a measure of how much atmosphere is in the way, so reusing it
+    // keeps the two from disagreeing: a sky that looks overcast also lights
+    // like one.
+    sunAmount: sun.amount * (1 - w.tint * 0.85),
   };
 }
 
