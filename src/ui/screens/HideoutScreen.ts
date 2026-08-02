@@ -13,31 +13,82 @@ import { RECIPES } from '../../meta/Crafting';
 import { TRADERS, type TraderId } from '../../meta/Traders';
 import { QUESTS } from '../../meta/Quests';
 import { SKILLS, MAX_SKILL_LEVEL, type SkillId } from '../../meta/Progression';
-import { attach, canAttach, detach, loadMagazine, resolveWeapon, unloadMagazine } from '../../weapons/WeaponRuntime';
+import { attach, canAttach, detach, loadMagazine, resolveWeapon, totalRounds, unloadMagazine } from '../../weapons/WeaponRuntime';
 
 /**
  * HideoutScreen - everything the player does between raids.
  *
- * Six tabs, in the order a session naturally flows: prepare your kit, upgrade
- * the base, queue production, restock at the traders, check your tasks, and
- * decide what to insure. The deploy button lives in the header so it is always
- * one tap away no matter which tab you are on.
+ * Navigation is a **vertical rail**, not a tab bar across the top, and that is
+ * the single most important layout decision on this screen. A phone held in
+ * landscape has around 390 logical pixels of height; a horizontal tab strip
+ * costs 50 of them plus its margin, which is a quarter of the usable content
+ * area spent on six words. Moved to the side it costs nothing vertically, and
+ * it lands under the left thumb where the hand already is.
+ *
+ * The first stop is an overview rather than a gear grid. A player returning
+ * after a raid needs to know what changed and what is worth doing next -
+ * builds that finished, crafts that are ready, quests that can be handed in,
+ * insurance that came back - before they start rearranging pockets.
  *
  * The header permanently shows the value at risk in the current loadout. That
  * number is the whole game in one figure: it is what you lose if the next raid
  * goes badly, and it should make the player hesitate before they tap deploy.
  */
 
-type TabId = 'gear' | 'base' | 'craft' | 'traders' | 'quests' | 'insurance';
+type TabId = 'overview' | 'gear' | 'base' | 'craft' | 'traders' | 'quests' | 'insurance';
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'gear', label: 'Ausrüstung' },
-  { id: 'base', label: 'Versteck' },
-  { id: 'craft', label: 'Werkstatt' },
-  { id: 'traders', label: 'Händler' },
-  { id: 'quests', label: 'Aufträge' },
-  { id: 'insurance', label: 'Versicherung' },
+/**
+ * Rail entries. The glyph is not decoration - at rail width the label wraps to
+ * two lines and the shape is what the eye actually navigates by.
+ */
+const TABS: { id: TabId; label: string; glyph: string }[] = [
+  { id: 'overview', label: 'Übersicht', glyph: '◈' },
+  { id: 'gear', label: 'Ausrüstung', glyph: '⬢' },
+  { id: 'base', label: 'Versteck', glyph: '⌂' },
+  { id: 'craft', label: 'Werkstatt', glyph: '⚙' },
+  { id: 'traders', label: 'Händler', glyph: '⇄' },
+  { id: 'quests', label: 'Aufträge', glyph: '✦' },
+  { id: 'insurance', label: 'Versicherung', glyph: '⛨' },
 ];
+
+/**
+ * One shop line: name and description on top, price and action underneath.
+ *
+ * Deliberately stacked rather than a single row. A trader panel on a phone is
+ * around 200 px wide; putting the name, the price and a button on one line
+ * leaves the name about 40 px, and a word longer than that does not wrap - it
+ * overflows its flex box and paints straight over the price. Two lines cost
+ * nothing here and cannot break.
+ */
+function tradeRow(spec: {
+  title: string;
+  titleColor?: string;
+  detail?: string;
+  note?: string;
+  price: string;
+  actionLabel: string;
+  actionClass: string;
+  disabled?: boolean;
+  onAction: () => void;
+}): HTMLElement {
+  const action = button(spec.actionLabel, spec.onAction, spec.actionClass,
+    spec.disabled ? { disabled: 'true' } : {});
+
+  return el('div', { class: 'trade-row' }, [
+    el('div', {
+      class: 'title',
+      text: spec.title,
+      style: spec.titleColor ? { color: spec.titleColor } : {},
+    }),
+    spec.detail ? el('div', { class: 'detail', text: spec.detail }) : null,
+    el('div', { class: 'foot' }, [
+      spec.note ? el('span', { class: 'note', text: spec.note }) : null,
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'price', text: spec.price }),
+      action,
+    ].filter(Boolean) as HTMLElement[]),
+  ].filter(Boolean) as HTMLElement[]);
+}
 
 export class HideoutScreen implements Screen {
   readonly id = 'hideout';
@@ -47,7 +98,7 @@ export class HideoutScreen implements Screen {
   private subtitleEl: HTMLElement;
   private tabBar: HTMLElement;
   private content: HTMLElement;
-  private activeTab: TabId = 'gear';
+  private activeTab: TabId = 'overview';
 
   private inventoryView: InventoryView;
   private detailPanel: HTMLElement;
@@ -64,16 +115,16 @@ export class HideoutScreen implements Screen {
     },
   ) {
     const deployBtn = button('Einsatz starten', () => this.actions.onDeploy(), 'btn primary');
-    const settingsBtn = button('⚙', () => this.actions.onSettings(), 'btn ghost small');
+    const settingsBtn = button('⚙', () => this.actions.onSettings(), 'btn ghost small icon');
 
     const shell = screenShell('Versteck', '', null, [settingsBtn, deployBtn]);
     this.root = shell.root;
     this.body = shell.body;
     this.subtitleEl = shell.subtitleEl;
+    shell.header.classList.add('compact');
 
-    this.tabBar = el('div', { class: 'tabs', style: { marginBottom: '8px' } });
-    this.content = el('div', { style: { flex: '1', minHeight: '0', display: 'flex', gap: '10px' } });
-    this.body.style.flexDirection = 'column';
+    this.tabBar = el('div', { class: 'nav-rail' });
+    this.content = el('div', { class: 'hub-content' });
     this.body.append(this.tabBar, this.content);
 
     this.inventoryView = new InventoryView((stack, source) => {
@@ -109,10 +160,16 @@ export class HideoutScreen implements Screen {
   private buildTabs(): void {
     clear(this.tabBar);
     for (const tab of TABS) {
+      const badgeCount = this.badgeFor(tab.id);
       const node = el('div', {
-        class: `tab${tab.id === this.activeTab ? ' active' : ''}`,
-        text: tab.label,
-      });
+        class: `nav-item${tab.id === this.activeTab ? ' active' : ''}`,
+      }, [
+        el('span', { class: 'glyph', text: tab.glyph }),
+        el('span', { class: 'label', text: tab.label }),
+        // A badge means "there is something here you can act on right now",
+        // never just "this exists". A rail full of badges says nothing.
+        badgeCount > 0 ? el('span', { class: 'badge', text: String(badgeCount) }) : null,
+      ].filter(Boolean) as HTMLElement[]);
       node.addEventListener('click', () => {
         this.activeTab = tab.id;
         this.selected = null;
@@ -120,6 +177,21 @@ export class HideoutScreen implements Screen {
         this.renderContent();
       });
       this.tabBar.appendChild(node);
+    }
+  }
+
+  /** How many actionable things are waiting behind a rail entry. */
+  private badgeFor(tab: TabId): number {
+    const p = this.profile;
+    switch (tab) {
+      case 'quests':
+        return p.quests.readyToTurnIn().length;
+      case 'craft':
+        return p.crafting.jobs.filter((j) => j.secondsRemaining <= 0).length;
+      case 'insurance':
+        return p.insurance.pending.length;
+      default:
+        return 0;
     }
   }
 
@@ -131,14 +203,36 @@ export class HideoutScreen implements Screen {
   private updateSubtitle(): void {
     const p = this.profile;
     const risk = loadoutRiskValue(p.loadout);
-    this.subtitleEl.textContent =
-      `Stufe ${p.progression.level} · ${money(p.money)} · Lager ${money(p.stashValue)} · ` +
-      `Im Einsatz auf dem Spiel: ${money(risk)}`;
+    // Chips rather than a run-on sentence: at 12 px on a phone a single line of
+    // four values separated by dots is a wall, and the one that matters - what
+    // this raid could cost - has to be findable at a glance.
+    clear(this.subtitleEl);
+    this.subtitleEl.append(
+      el('span', { class: 'chip' }, [
+        el('span', { class: 'k', text: 'Stufe' }),
+        el('span', { class: 'v', text: String(p.progression.level) }),
+      ]),
+      el('span', { class: 'chip' }, [
+        el('span', { class: 'k', text: 'Guthaben' }),
+        el('span', { class: 'v', text: money(p.money) }),
+      ]),
+      el('span', { class: 'chip' }, [
+        el('span', { class: 'k', text: 'Lager' }),
+        el('span', { class: 'v', text: money(p.stashValue) }),
+      ]),
+      el('span', { class: 'chip risk' }, [
+        el('span', { class: 'k', text: 'Im Risiko' }),
+        el('span', { class: 'v', text: money(risk) }),
+      ]),
+    );
   }
 
   private renderContent(): void {
     clear(this.content);
     switch (this.activeTab) {
+      case 'overview':
+        this.renderOverviewTab();
+        break;
       case 'gear':
         this.renderGearTab();
         break;
@@ -160,6 +254,232 @@ export class HideoutScreen implements Screen {
       default:
         break;
     }
+  }
+
+  // =========================================================================
+  // Overview - the hub proper
+  // =========================================================================
+
+  /**
+   * What changed while you were out, and what is worth doing before you go
+   * back. Two columns: readiness on the left (can I deploy, and what am I
+   * risking), the base's running clocks on the right.
+   */
+  private renderOverviewTab(): void {
+    const p = this.profile;
+
+    // --- left: operator and loadout readiness ------------------------------
+    const left = el('div', { class: 'panel-body' });
+
+    left.appendChild(
+      el('div', { class: 'ov-operator' }, [
+        el('div', { class: 'row' }, [
+          el('span', { class: 'lvl', text: `Stufe ${p.progression.level}` }),
+          el('span', { class: 'grow' }),
+          el('span', { class: 'xp', text: `${Math.round(p.progression.levelProgress * 100)} % zur nächsten` }),
+        ]),
+        bar(p.progression.levelProgress, '#c8913a'),
+        el('div', { class: 'row stats' }, [
+          el('span', { text: `${p.raids} Einsätze` }),
+          el('span', { text: `${p.survived} überlebt` }),
+          el('span', { text: `${Math.round(p.survivalRate * 100)} % Quote` }),
+        ]),
+      ]),
+    );
+
+    // Readiness checklist. Every line is a thing that has actually killed a
+    // raid: no gun, no bandage, an empty magazine, nothing insured.
+    const checks = this.readinessChecks();
+    const list = el('div', { class: 'ov-checks' });
+    for (const check of checks) {
+      list.appendChild(
+        el('div', { class: `ov-check ${check.ok ? 'ok' : check.severity}` }, [
+          el('span', { class: 'mark', text: check.ok ? '✓' : '!' }),
+          el('span', { class: 'grow' }, [
+            el('div', { class: 'title', text: check.label }),
+            el('div', { class: 'sub', text: check.detail }),
+          ]),
+        ]),
+      );
+    }
+    left.append(
+      el('div', { class: 'panel-head', style: { border: 'none', padding: '12px 0 6px' }, text: 'Einsatzbereitschaft' }),
+      list,
+    );
+
+    // --- right: what the base is doing --------------------------------------
+    const right = el('div', { class: 'panel-body' });
+    const activity = this.baseActivity();
+
+    if (activity.length === 0) {
+      right.appendChild(
+        el('div', { class: 'empty-note', text: 'Nichts läuft. Werkstatt und Ausbau warten auf dich.' }),
+      );
+    } else {
+      for (const item of activity) {
+        right.appendChild(
+          el('div', { class: `ov-activity${item.done ? ' done' : ''}` }, [
+            el('div', { class: 'row' }, [
+              el('span', { class: 'title', text: item.title }),
+              el('span', { class: 'grow' }),
+              el('span', { class: 'clock', text: item.done ? 'Fertig' : duration(item.remaining) }),
+            ]),
+            el('div', { class: 'sub', text: item.detail }),
+            bar(item.progress, item.done ? '#4f9e6a' : '#4f7d9e'),
+          ]),
+        );
+      }
+    }
+
+    const quickJump = (label: string, tab: TabId): HTMLElement => {
+      const b = button(label, () => {
+        this.activeTab = tab;
+        this.buildTabs();
+        this.renderContent();
+      }, 'btn small');
+      b.style.flex = '1';
+      return b;
+    };
+
+    right.appendChild(
+      el('div', { class: 'ov-jumps' }, [
+        quickJump('Ausrüstung', 'gear'),
+        quickJump('Händler', 'traders'),
+        quickJump('Aufträge', 'quests'),
+      ]),
+    );
+
+    this.content.append(
+      el('div', { class: 'panel', style: { flex: '1.15' } }, [
+        el('div', { class: 'panel-head' }, [el('span', { text: 'Operator' })]),
+        left,
+      ]),
+      el('div', { class: 'panel', style: { flex: '1' } }, [
+        el('div', { class: 'panel-head' }, [el('span', { text: 'Versteck' })]),
+        right,
+      ]),
+    );
+  }
+
+  private readinessChecks(): { label: string; detail: string; ok: boolean; severity: 'bad' | 'warn' }[] {
+    const loadout = this.profile.loadout;
+    const out: { label: string; detail: string; ok: boolean; severity: 'bad' | 'warn' }[] = [];
+
+    const primary = loadout.equipped.primary;
+    const sidearm = loadout.equipped.sidearm;
+    const weapon = primary ?? sidearm;
+    if (!weapon) {
+      out.push({ label: 'Keine Waffe', detail: 'Du läufst unbewaffnet los.', ok: false, severity: 'bad' });
+    } else {
+      const rounds = totalRounds(weapon);
+      out.push({
+        label: defOf(weapon).name,
+        detail: rounds > 0 ? `${rounds} Schuss geladen` : 'Nicht geladen',
+        ok: rounds > 0,
+        severity: 'bad',
+      });
+    }
+
+    const spareAmmo = loadout.findStack((_, def) => def.category === 'ammo' || def.category === 'magazine');
+    out.push({
+      label: 'Nachschub',
+      detail: spareAmmo ? 'Ersatzmunition dabei' : 'Keine Ersatzmunition im Gepäck',
+      ok: !!spareAmmo,
+      severity: 'warn',
+    });
+
+    const meds = loadout.findStack((_, def) => def.category === 'med');
+    out.push({
+      label: 'Medizin',
+      detail: meds ? 'Verbandmaterial dabei' : 'Nichts gegen Blutungen dabei',
+      ok: !!meds,
+      severity: 'bad',
+    });
+
+    out.push({
+      label: 'Sicherheitsbehälter',
+      detail: loadout.equipped.secure
+        ? 'Inhalt überlebt deinen Tod'
+        : 'Ohne Behälter geht bei einem Tod alles verloren',
+      ok: !!loadout.equipped.secure,
+      severity: 'warn',
+    });
+
+    const insured = this.profile.insurance.activeCover.length;
+    const risk = loadoutRiskValue(loadout);
+    out.push({
+      label: 'Versicherung',
+      detail: insured > 0
+        ? `${insured} Gegenstände abgesichert`
+        : risk > 40000 ? 'Nichts abgesichert bei hohem Wert' : 'Nichts abgesichert',
+      ok: insured > 0 || risk <= 40000,
+      severity: 'warn',
+    });
+
+    const stats = loadout.stats;
+    out.push({
+      label: 'Traglast',
+      detail: `${stats.weight.toFixed(1)} kg`,
+      ok: stats.weight < 26,
+      severity: 'warn',
+    });
+
+    return out;
+  }
+
+  private baseActivity(): { title: string; detail: string; remaining: number; progress: number; done: boolean }[] {
+    const p = this.profile;
+    const out: { title: string; detail: string; remaining: number; progress: number; done: boolean }[] = [];
+
+    for (const id of Object.keys(HIDEOUT_MODULES) as ModuleId[]) {
+      const state = p.hideout.modules[id];
+      if (state.buildingLevel === 0) continue;
+      const def = HIDEOUT_MODULES[id];
+      const total = def.levels[state.buildingLevel - 1]?.buildSeconds ?? 1;
+      out.push({
+        title: `${def.name} · Stufe ${state.buildingLevel}`,
+        detail: 'Ausbau läuft',
+        remaining: state.buildRemaining,
+        progress: 1 - state.buildRemaining / total,
+        done: state.buildRemaining <= 0,
+      });
+    }
+
+    for (const job of p.crafting.jobs) {
+      const recipe = RECIPES.find((r) => r.id === job.recipeId);
+      out.push({
+        title: recipe?.name ?? 'Fertigung',
+        detail: HIDEOUT_MODULES[job.module].name,
+        remaining: job.secondsRemaining,
+        progress: 1 - job.secondsRemaining / Math.max(1, job.totalSeconds),
+        done: job.secondsRemaining <= 0,
+      });
+    }
+
+    const returning = p.insurance.activeCover.filter((e) => e.returning);
+    if (returning.length > 0) {
+      const soonest = Math.min(...returning.map((e) => e.returnIn));
+      out.push({
+        title: `Versicherung · ${returning.length} Gegenstände`,
+        detail: 'Auf dem Rückweg',
+        remaining: soonest,
+        progress: 0.5,
+        done: false,
+      });
+    }
+    if (p.insurance.pending.length > 0) {
+      out.push({
+        title: `${p.insurance.pending.length} Gegenstände zurück`,
+        detail: 'Warten auf Abholung',
+        remaining: 0,
+        progress: 1,
+        done: true,
+      });
+    }
+
+    // Finished first: those are the ones that need a tap.
+    out.sort((a, b) => Number(b.done) - Number(a.done) || a.remaining - b.remaining);
+    return out;
   }
 
   // =========================================================================
@@ -715,35 +1035,32 @@ export class HideoutScreen implements Screen {
       const itemDef = defOf(offer.stack);
       const affordable = this.profile.money >= offer.price;
       stock.appendChild(
-        el('div', { class: 'list-row' }, [
-          el('div', { class: 'grow' }, [
-            el('div', { class: 'title', text: itemDef.name, style: { color: RARITY_COLOR[itemDef.rarity] } }),
-            el('div', { class: 'sub', text: `${itemDef.description.slice(0, 74)}${itemDef.description.length > 74 ? '…' : ''}` }),
-            el('div', { class: 'sub', text: `Bestand: ${offer.quantity}` }),
-          ]),
-          el('div', { class: 'price', text: money(offer.price) }),
-          button(
-            'Kaufen',
-            () => {
-              if (!affordable) {
-                this.actions.notify('Nicht genug Geld', 'bad');
-                return;
-              }
-              const bought = this.profile.traders.buy(this.selectedTrader, index);
-              if (!bought) return;
-              if (this.profile.stash.add(bought) > 0) {
-                this.actions.notify('Lager voll', 'bad');
-                return;
-              }
-              this.profile.spend(offer.price);
-              this.actions.notify(`Gekauft: ${itemDef.name}`, 'good');
-              this.actions.onSave();
-              this.renderContent();
-            },
-            `btn small ${affordable ? 'primary' : 'ghost'}`,
-            affordable ? {} : { disabled: 'true' },
-          ),
-        ]),
+        tradeRow({
+          title: itemDef.name,
+          titleColor: RARITY_COLOR[itemDef.rarity],
+          detail: itemDef.description,
+          note: `Bestand: ${offer.quantity}`,
+          price: money(offer.price),
+          actionLabel: 'Kaufen',
+          actionClass: `btn small ${affordable ? 'primary' : 'ghost'}`,
+          disabled: !affordable,
+          onAction: () => {
+            if (!affordable) {
+              this.actions.notify('Nicht genug Geld', 'bad');
+              return;
+            }
+            const bought = this.profile.traders.buy(this.selectedTrader, index);
+            if (!bought) return;
+            if (this.profile.stash.add(bought) > 0) {
+              this.actions.notify('Lager voll', 'bad');
+              return;
+            }
+            this.profile.spend(offer.price);
+            this.actions.notify(`Gekauft: ${itemDef.name}`, 'good');
+            this.actions.onSave();
+            this.renderContent();
+          },
+        }),
       );
     });
 
@@ -776,18 +1093,18 @@ export class HideoutScreen implements Screen {
         const price = this.profile.traders.sellPrice(this.selectedTrader, stack);
         const itemDef = defOf(stack);
         sellPanel.appendChild(
-          el('div', { class: 'list-row' }, [
-            el('div', { class: 'grow' }, [
-              el('div', { class: 'title', text: `${itemDef.name}${stack.count > 1 ? ` x${stack.count}` : ''}` }),
-            ]),
-            el('div', { class: 'price', text: money(price) }),
-            button('Verkaufen', () => {
+          tradeRow({
+            title: `${itemDef.name}${stack.count > 1 ? ` x${stack.count}` : ''}`,
+            price: money(price),
+            actionLabel: 'Verkaufen',
+            actionClass: 'btn small',
+            onAction: () => {
               this.profile.stash.remove(stack.id);
               this.profile.earn(this.profile.traders.sell(this.selectedTrader, stack));
               this.actions.onSave();
               this.renderContent();
-            }, 'btn small'),
-          ]),
+            },
+          }),
         );
       }
     }

@@ -62,7 +62,15 @@ const visibleScreens = () =>
     Array.from(document.querySelectorAll('.screen:not(.hidden) .screen-title')).map((t) => t.textContent),
   );
 
-const tab = (label) => page.locator('.screen:not(.hidden) .tab', { hasText: label }).first();
+/** Which screen is actually on top, by hit-testing the middle of the viewport. */
+const topmostScreen = (page) =>
+  page.evaluate(() => {
+    const el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+    return el?.closest('.screen')?.dataset.screen ?? null;
+  });
+
+const tab = (label) =>
+  page.locator('.screen:not(.hidden) .nav-item, .screen:not(.hidden) .tab', { hasText: label }).first();
 
 let failure = null;
 try {
@@ -70,21 +78,41 @@ try {
   await page.waitForTimeout(600);
   await shot('menu');
 
-  // --- new profile --------------------------------------------------------
+  // --- new profile ---------------------------------------------------------
   await page.getByRole('button', { name: 'Neues Profil' }).click();
   await page.waitForTimeout(600);
+
+  // First run opens the primer over the hideout. It must be on top, not
+  // merely present - a pushed screen rendering underneath the one it was
+  // pushed over is invisible to every assertion except a screenshot.
   const afterNew = await visibleScreens();
-  assert(afterNew.includes('Versteck'), `expected the hideout, got ${JSON.stringify(afterNew)}`);
+  assert(afterNew.includes('Erste Schritte'), `expected the primer, got ${JSON.stringify(afterNew)}`);
+  assert(await topmostScreen(page) === 'primer', 'the primer must render above the hideout');
+  await shot('primer');
+
+  // Walk every card, then finish.
+  for (let i = 0; i < 3; i++) {
+    await page.getByRole('button', { name: 'Weiter' }).click();
+    await page.waitForTimeout(220);
+  }
+  await shot('primer-last');
+  await page.getByRole('button', { name: 'Los geht’s' }).click();
+  await page.waitForTimeout(400);
+
+  const afterPrimer = await visibleScreens();
+  assert(afterPrimer.includes('Versteck'), `expected the hideout, got ${JSON.stringify(afterPrimer)}`);
+  assert(!afterPrimer.includes('Erste Schritte'), 'the primer should be dismissed');
   await shot('hideout-gear');
 
-  // --- every hideout tab renders -------------------------------------------
-  for (const label of ['Versteck', 'Werkstatt', 'Händler', 'Aufträge', 'Versicherung']) {
+  // --- every hub section renders --------------------------------------------
+  for (const label of ['Ausrüstung', 'Versteck', 'Werkstatt', 'Händler', 'Aufträge', 'Versicherung']) {
     await tab(label).click();
     await page.waitForTimeout(350);
     await shot(`hideout-${label.toLowerCase()}`);
   }
-  await tab('Ausrüstung').click();
+  await tab('Übersicht').click();
   await page.waitForTimeout(300);
+  await shot('hideout-overview');
 
   // --- deploy ---------------------------------------------------------------
   await page.getByRole('button', { name: 'Einsatz starten' }).click();
@@ -123,8 +151,12 @@ try {
     await page.evaluate(() => window.game.session.torchOn),
     'the light should be on after pressing L',
   );
+  // Relative, not absolute: the beam covers a fixed slice of the frame, so how
+  // many absolute levels it adds depends on what the rest of the scene is
+  // doing. Under fog the surroundings are already bright and the same beam
+  // moves the mean far less.
   assert(
-    lit > darkness + 4,
+    lit > darkness * 1.05,
     `the beam should brighten the frame (dark ${darkness.toFixed(1)}, lit ${lit.toFixed(1)})`,
   );
   console.log(`torch: centre luminance ${darkness.toFixed(1)} -> ${lit.toFixed(1)}`);

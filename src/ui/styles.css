@@ -113,6 +113,221 @@ html, body {
 }
 
 /* ==========================================================================
+   First-run primer
+   ========================================================================== */
+
+.primer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.primer-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.primer-text { flex: 1; min-width: 0; max-width: 62ch; }
+
+.primer-text .eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.primer-text .title {
+  margin: 4px 0 8px;
+  font-size: clamp(17px, 3.2vw, 23px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-wrap: balance;
+}
+
+.primer-text p {
+  margin: 0 0 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.primer-figure {
+  flex: 0 0 auto;
+  width: min(38%, 300px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.primer-figure .caption {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* --- control layout diagram ---------------------------------------------- */
+
+.primer-figure .phone {
+  position: relative;
+  aspect-ratio: 2 / 1;
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.pz {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px;
+  text-align: center;
+}
+
+.pz .l { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.pz .h { font-size: 8px; color: var(--text-faint); line-height: 1.2; }
+
+.pz.move {
+  left: 0;
+  background: rgba(79, 125, 158, 0.12);
+  border-right: 1px dashed var(--line-bright);
+  color: #7fa8c4;
+}
+
+.pz.look { right: 0; background: rgba(200, 145, 58, 0.09); color: var(--accent); }
+
+.pb {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(160, 172, 188, 0.4);
+  background: rgba(20, 24, 30, 0.9);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pb.fire { right: 6%; bottom: 10%; width: 26%; aspect-ratio: 1; border-color: rgba(200, 90, 70, 0.6); }
+.pb.ads { right: 36%; bottom: 14%; width: 18%; aspect-ratio: 1; }
+.pb.torch { left: 6%; bottom: 14%; width: 17%; aspect-ratio: 1; border-color: var(--accent-dim); color: var(--accent); }
+
+/* --- loop diagram --------------------------------------------------------- */
+
+.primer-figure .loop { display: flex; flex-direction: column; gap: 4px; }
+
+.ls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-dim);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+
+.ls .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.ls .l { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* --- footer --------------------------------------------------------------- */
+
+.primer-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.primer-dots { flex: 1; display: flex; justify-content: center; gap: 8px; }
+
+.primer-dots .dot {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-bright);
+  cursor: pointer;
+}
+
+.primer-dots .dot.on { background: var(--accent); }
+
+@media (max-height: 430px) {
+  .primer-card { gap: 12px; }
+  .primer-text p { font-size: 11.5px; margin-bottom: 5px; }
+  .primer-figure { width: min(34%, 250px); }
+}
+
+/* ==========================================================================
+   Install hint
+   ========================================================================== */
+
+.install-banner {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + var(--safe-b));
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 460px);
+  padding: 7px 8px 7px 14px;
+  border: 1px solid var(--line-bright);
+  border-radius: 20px;
+  background: rgba(18, 21, 26, 0.94);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: install-in 0.4s ease-out both;
+}
+
+@keyframes install-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .install-banner { animation: none; }
+}
+
+.install-banner .text { flex: 1; }
+.install-banner b { color: var(--text); font-weight: 600; }
+
+.install-banner .close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ==========================================================================
    Generic chrome
    ========================================================================== */
 
@@ -161,10 +376,17 @@ html, body {
   color: var(--text-dim);
 }
 
+/* Square icon buttons still need a thumb-sized hit box; without a min-width a
+   single glyph collapses the button to about 33 px. */
+.btn.icon { min-width: 44px; padding-left: 0; padding-right: 0; }
+
 .btn.small {
   font-size: 12px;
   padding: 7px 11px;
-  min-height: 34px;
+  /* 40 is the floor at which a thumb reliably lands. Apple asks for 44 and
+     Google for 48; those are right for a document, but a game HUD trades some
+     of it back for density - below 40 the misses start. */
+  min-height: 40px;
 }
 
 .bar {
@@ -174,7 +396,10 @@ html, body {
   border: 1px solid var(--line);
   border-radius: 2px;
   overflow: hidden;
+  flex: 0 0 auto;
 }
+
+.bar.has-label { height: 16px; }
 
 .bar-fill {
   height: 100%;
@@ -293,6 +518,213 @@ html, body {
   gap: 4px;
   flex: 0 0 auto;
 }
+
+/* ==========================================================================
+   Hub: vertical navigation rail
+   ==========================================================================
+
+   Landscape on a phone gives roughly 390 logical pixels of height. A tab strip
+   across the top spends 50 of them on six words; on the side it spends none,
+   and it sits under the thumb that is already there. */
+
+.nav-rail {
+  flex: 0 0 auto;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+
+.nav-rail::-webkit-scrollbar { display: none; }
+
+.nav-item {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  /* Seven entries have to fit 316 px of content height on a landscape phone
+     without scrolling: 7 x 40 plus gaps lands at 304. */
+  min-height: 40px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-left: 2px solid transparent;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: center;
+}
+
+.nav-item .glyph { font-size: 15px; line-height: 1; }
+
+.nav-item .label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.15;
+}
+
+.nav-item.active {
+  background: var(--bg-3);
+  border-color: var(--line-bright);
+  border-left-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-item .badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #14171c;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.hub-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 10px;
+}
+
+/* --- compact header: chips instead of a run-on line ---------------------- */
+
+.screen-head.compact { padding-bottom: 6px; }
+.screen-head.compact .screen-title { font-size: 15px; letter-spacing: 0.12em; }
+
+.screen-head.compact .screen-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 3px;
+}
+
+.screen-sub .chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-1);
+  white-space: nowrap;
+}
+
+.screen-sub .chip .k {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.screen-sub .chip .v {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.screen-sub .chip.risk { border-color: var(--accent-dim); }
+.screen-sub .chip.risk .v { color: var(--accent); }
+
+/* --- overview ------------------------------------------------------------ */
+
+.ov-operator {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ov-operator .row { display: flex; align-items: baseline; gap: 8px; }
+.ov-operator .grow { flex: 1; }
+.ov-operator .lvl { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.ov-operator .xp { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+
+.ov-operator .stats {
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-checks { display: flex; flex-direction: column; gap: 4px; }
+
+.ov-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-bright);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+
+.ov-check .grow { flex: 1; min-width: 0; }
+.ov-check .title { font-size: 12px; font-weight: 600; }
+.ov-check .sub { font-size: 10px; color: var(--text-dim); }
+
+.ov-check .mark {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.ov-check.ok { border-left-color: var(--good); }
+.ov-check.ok .mark { color: var(--good); }
+.ov-check.warn { border-left-color: var(--warn); }
+.ov-check.warn .mark { color: var(--warn); }
+.ov-check.warn .sub { color: var(--warn); }
+.ov-check.bad { border-left-color: var(--bad); }
+.ov-check.bad .mark { color: var(--bad); }
+.ov-check.bad .sub { color: var(--bad); }
+
+.ov-activity {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-activity.done { border-color: var(--good); }
+.ov-activity .row { display: flex; align-items: baseline; gap: 8px; }
+.ov-activity .grow { flex: 1; }
+.ov-activity .title { font-size: 12px; font-weight: 600; }
+.ov-activity .sub { font-size: 10px; color: var(--text-dim); }
+
+.ov-activity .clock {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-activity.done .clock { color: var(--good); }
+
+.ov-jumps { display: flex; gap: 6px; margin-top: 10px; }
 
 .tab {
   flex: 1;
@@ -480,7 +912,75 @@ html, body {
 .list-row .grow { flex: 1; min-width: 0; }
 .list-row .title { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
 .list-row .sub { font-size: 11px; color: var(--text-dim); }
-.list-row .price { font-family: var(--mono); font-size: 13px; color: var(--accent); white-space: nowrap; }
+
+/* flex-shrink is the trap here. Without `flex: 0 0 auto` the price is squeezed
+   narrower than its own text, and `nowrap` then spills it straight over the
+   item name to its left - two readable strings painted on top of each other. */
+.list-row .price {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.list-row .btn,
+.list-row .tag { flex: 0 0 auto; }
+
+/* Long unbreakable words in a narrow flex child overflow their box rather than
+   wrapping, and overflow in a flex row means overlapping siblings. */
+.list-row .title,
+.list-row .sub { overflow-wrap: anywhere; }
+
+/* --- shop rows ----------------------------------------------------------- */
+
+.trade-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  margin-bottom: 6px;
+}
+
+.trade-row .title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  overflow-wrap: anywhere;
+}
+
+.trade-row .detail {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.trade-row .foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.trade-row .foot .spacer { flex: 1; }
+.trade-row .note { font-size: 10px; color: var(--text-faint); white-space: nowrap; }
+
+.trade-row .price {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.trade-row .btn { flex: 0 0 auto; min-height: 40px; padding: 6px 12px; font-size: 11px; }
 
 /* ==========================================================================
    In-raid HUD
@@ -983,6 +1483,20 @@ html, body {
   margin-top: 20px;
 }
 
+/* Pinned to the bottom rather than flowing after the buttons: as a flow item
+   it pushed the hero past the viewport on a 360 px-tall phone, and a centred
+   hero that overflows is worse than a footer that overlaps nothing. */
+.menu-colophon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(8px + var(--safe-b));
+  width: min(620px, calc(100% - 32px));
+  opacity: 0.6;
+  text-align: center;
+  line-height: 1.4;
+}
+
 .result-banner {
   text-align: center;
   padding: 14px;
@@ -1066,17 +1580,24 @@ html, body {
    Compact layout for short viewports
    ========================================================================== */
 
+/* Every phone in landscape is under 430 px tall, so this is not an edge case -
+   it is the layout almost every player sees. */
 @media (max-height: 430px) {
   body { font-size: 13px; }
-  .inv-cell { width: 32px; height: 32px; }
+  .inv-cell { width: 36px; height: 36px; }
   .touch-btn.fire { width: 76px; height: 76px; }
   .hud-vitals { width: 164px; padding: 6px 8px; }
   .screen-title { font-size: 16px; }
 
-  /* Menus have to fit without scrolling on a short landscape phone. */
-  .btn { min-height: 38px; padding: 8px 14px; font-size: 13px; }
+  /* Menus have to fit without scrolling on a short landscape phone - but not
+     by shrinking buttons below the size a thumb can hit. Density comes out of
+     padding and type size instead. */
+  .btn { min-height: 44px; padding: 8px 14px; font-size: 13px; }
+  .btn.small { min-height: 40px; padding: 6px 10px; }
   .menu-actions { gap: 6px; margin-top: 10px; }
   .menu-hero .tagline { display: none; }
+  /* Two lines of colophon is more height than a 360 px phone can spare. */
+  .menu-colophon { display: none; }
 
   /* The debrief banner is the least informative element on the screen, so it
      is the first thing to give up height to the figures underneath. */

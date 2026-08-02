@@ -1,5 +1,55 @@
 import './ui/styles.css';
 import { Game } from './game/Game';
+import { IS_ANDROID, IS_IOS, isStandalone, lockLandscape, requestFullscreen } from './platform/Platform';
+
+/** Remembers that the player has dismissed the install hint. */
+const INSTALL_DISMISSED_KEY = 'grayzone.install.dismissed';
+
+/**
+ * A one-line hint that the game runs better installed.
+ *
+ * Shown once, dismissible for good, and only where it changes something: on
+ * iPhone the home screen is the only route to a fullscreen landscape viewport,
+ * and on Android it is the difference between a browser tab and an app icon.
+ * Inside an embed (an iframe with no install path) it never appears.
+ */
+function installBanner(host: HTMLElement): void {
+  if (isStandalone() || window.self !== window.top) return;
+  if (!IS_IOS && !IS_ANDROID) return;
+  try {
+    if (localStorage.getItem(INSTALL_DISMISSED_KEY)) return;
+  } catch {
+    // Private mode without storage: show it, dismissal just will not stick.
+  }
+
+  const banner = document.createElement('div');
+  banner.className = 'install-banner';
+  banner.innerHTML =
+    `<span class="text">${
+      IS_IOS
+        ? 'Für Vollbild: Teilen &rsaquo; <b>Zum Home-Bildschirm</b>'
+        : 'Für Vollbild: Menü &rsaquo; <b>App installieren</b>'
+    }</span>`;
+
+  const close = document.createElement('button');
+  close.className = 'close';
+  close.type = 'button';
+  close.textContent = '✕';
+  close.setAttribute('aria-label', 'Hinweis schließen');
+  close.addEventListener('click', () => {
+    banner.remove();
+    try {
+      localStorage.setItem(INSTALL_DISMISSED_KEY, '1');
+    } catch {
+      // Nothing to do; the hint reappears next launch.
+    }
+  });
+
+  banner.appendChild(close);
+  host.appendChild(banner);
+  // Long enough to read once, short enough not to sit over the menu.
+  setTimeout(() => banner.remove(), 12000);
+}
 
 /**
  * Entry point.
@@ -49,6 +99,17 @@ function boot(): void {
     '<div class="screen-title">Bitte Gerät drehen</div>' +
     '<div class="screen-sub">GRAYZONE PROTOCOL läuft im Querformat.</div>';
   document.body.appendChild(rotatePrompt);
+
+  // Fullscreen and orientation lock both require a user gesture and both fail
+  // silently where unsupported, so the first tap tries and never asks again.
+  const claimTheScreen = (): void => {
+    document.removeEventListener('pointerdown', claimTheScreen);
+    if (!isStandalone()) requestFullscreen();
+    lockLandscape();
+  };
+  document.addEventListener('pointerdown', claimTheScreen, { once: true });
+
+  installBanner(app);
 
   const game = new Game(app);
 

@@ -45,6 +45,10 @@ export interface GameSettings {
   showFps: boolean;
   /** Hold to aim, or tap to toggle. */
   toggleAds: boolean;
+  /** Vibration feedback. Android only - iOS has never shipped the API. */
+  haptics: boolean;
+  /** The first-run primer has been read once. */
+  primerSeen: boolean;
 }
 
 export function defaultSettings(): GameSettings {
@@ -56,6 +60,8 @@ export function defaultSettings(): GameSettings {
     renderScale: 0,
     showFps: false,
     toggleAds: true,
+    haptics: true,
+    primerSeen: false,
   };
 }
 

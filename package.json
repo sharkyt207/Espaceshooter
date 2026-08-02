@@ -6,10 +6,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && node scripts/build-icons.mjs && vite build",
     "preview": "vite preview --host",
+    "viewports": "node tests/viewports.mjs",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
+    "icons": "node scripts/build-icons.mjs",
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "devDependencies": {

@@ -82,7 +82,9 @@ export function weight(kg: number): string {
 /** Horizontal progress bar with an optional label. */
 export function bar(fraction: number, color: string, label?: string): HTMLElement {
   const clamped = Math.max(0, Math.min(1, fraction));
-  return el('div', { class: 'bar' }, [
+  // A labelled bar needs a taller track: the 6 px default is thinner than the
+  // caption, which then overflows and paints over whatever is above it.
+  return el('div', { class: label ? 'bar has-label' : 'bar' }, [
     el('div', { class: 'bar-fill', style: { width: `${clamped * 100}%`, background: color } }),
     label ? el('span', { class: 'bar-label', text: label }) : null,
   ]);

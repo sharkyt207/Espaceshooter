@@ -45,8 +45,7 @@ export class MainMenu implements Screen {
           button('Einstellungen', actions.onSettings, 'btn ghost'),
         ]),
         el('div', {
-          class: 'screen-sub',
-          style: { marginTop: '22px', opacity: '0.6', maxWidth: '620px', textAlign: 'center' },
+          class: 'screen-sub menu-colophon',
           text:
             'Technischer Prototyp - eigenständige Umsetzung, eigene Assets, eigene Systeme. ' +
             'Ausgelegt auf Touch, Querformat und 60 Bilder pro Sekunde.',

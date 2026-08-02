@@ -17,8 +17,17 @@ import { MapScreen } from '../ui/screens/MapScreen';
 import { ResultsScreen } from '../ui/screens/ResultsScreen';
 import { SettingsScreen } from '../ui/screens/SettingsScreen';
 import { PauseScreen } from '../ui/screens/PauseScreen';
+import { PrimerScreen } from '../ui/screens/PrimerScreen';
 import { blueprintById } from '../data/MapData';
 import { makeConditions, rollWeather, type TimeOfDayId } from '../world/Conditions';
+import {
+  haptic,
+  interceptBack,
+  reacquireWakeLock,
+  releaseWakeLock,
+  requestWakeLock,
+  setHapticsEnabled,
+} from '../platform/Platform';
 import { stackValue } from '../inventory/ItemStack';
 
 /**
@@ -65,6 +74,7 @@ export class Game {
   private resultsScreen!: ResultsScreen;
   private settingsScreen!: SettingsScreen;
   private pauseScreen!: PauseScreen;
+  private primerScreen!: PrimerScreen;
 
   private readonly disposers: (() => void)[] = [];
   private lastFrameMs = 16;
@@ -94,7 +104,14 @@ export class Game {
       // Give the browser a beat to settle the new viewport before measuring.
       setTimeout(() => this.renderer.resize(), 120);
     });
+    // iOS Safari moves its toolbars without firing `resize`, which leaves the
+    // canvas the wrong height until something else happens to trigger one.
+    window.visualViewport?.addEventListener('resize', () => this.renderer.resize());
     document.addEventListener('visibilitychange', () => this.onVisibilityChange());
+
+    // Android's back button and back swipe close the page by default. Twenty
+    // five minutes of raid is far too much to lose to an edge swipe.
+    this.disposers.push(interceptBack(() => this.onSystemBack()));
 
     this.renderer.resize();
     this.screens.show('menu');
@@ -139,6 +156,7 @@ export class Game {
       onClose: () => this.screens.pop(),
       onApply: (settings) => this.applySettings(settings),
       onResetProfile: () => this.resetProfile(),
+      onShowPrimer: () => this.screens.push('primer'),
     });
 
     this.pauseScreen = new PauseScreen({
@@ -147,9 +165,12 @@ export class Game {
       onAbandon: () => this.abandonRaid(),
     });
 
+    this.primerScreen = new PrimerScreen({ onDone: () => this.dismissPrimer() });
+
     for (const screen of [
       this.mainMenu, this.hideout, this.deployScreen, this.lootScreen,
       this.mapScreen, this.resultsScreen, this.settingsScreen, this.pauseScreen,
+      this.primerScreen,
     ]) {
       this.screens.register(screen);
     }
@@ -183,6 +204,9 @@ export class Game {
         const angle = Math.atan2(payload.fromY - (this.session?.player.y ?? 0), payload.fromX - (this.session?.player.x ?? 0));
         this.renderer.onPlayerHit(angle);
         this.session?.effects.shake(Math.min(0.5, payload.amount / 60), 0.25);
+        // A heavy hit gets its own pattern: on a phone the player often feels
+        // it before they have read the health bar.
+        haptic(payload.amount >= 28 ? 'critical' : 'hurt');
       }),
     );
 
@@ -191,7 +215,9 @@ export class Game {
         // Hit confirmation only for the player's own rounds.
         if (payload.attackerId !== this.session?.player.id) return;
         const target = this.session?.ai.byActorId(payload.targetId);
-        this.renderer.onHitConfirmed(!!target && !target.alive);
+        const killed = !!target && !target.alive;
+        this.renderer.onHitConfirmed(killed);
+        haptic(killed ? 'kill' : 'hit');
       }),
     );
 
@@ -224,7 +250,8 @@ export class Game {
     this.disposers.push(bus.on('loot:opened', () => this.openLoot()));
 
     this.disposers.push(
-      bus.on('raid:ended', () => {
+      bus.on('raid:ended', (payload) => {
+        haptic(payload.survived ? 'extract' : 'critical');
         // Deferred to the next tick so the finishing system can complete.
         queueMicrotask(() => this.endRaid());
       }),
@@ -247,6 +274,7 @@ export class Game {
     this.input.invertY = settings.invertY;
     this.renderer.fixedScale = settings.renderScale;
     this.hud.setDebugVisible(settings.showFps);
+    setHapticsEnabled(settings.haptics);
     this.renderer.resize();
   }
 
@@ -263,6 +291,16 @@ export class Game {
     this.save.save(this.profile, true);
     this.state = 'hideout';
     this.screens.show('hideout');
+    // First profile ever: state the rules that are expensive to learn by
+    // losing a loadout. Returning players never see it again.
+    if (!this.settings.primerSeen) this.screens.push('primer');
+  }
+
+  private dismissPrimer(): void {
+    if (!this.settings.primerSeen) {
+      this.applySettings({ ...this.settings, primerSeen: true });
+    }
+    this.screens.pop();
   }
 
   private continueGame(): void {
@@ -341,6 +379,9 @@ export class Game {
     this.save.save(this.profile);
 
     this.state = 'raid';
+    // A raid runs up to 25 minutes with long stretches of no touch input.
+    // Without this the screen dims and locks somewhere on the approach.
+    void requestWakeLock();
     this.screens.closeAll();
     this.hud.clearNotifications();
     this.hud.setVisible(true);
@@ -369,6 +410,9 @@ export class Game {
     const session = this.session;
     const result = session?.raidResult;
     if (!session || !result) return;
+
+    // Menus do not need the screen held awake, and holding it costs battery.
+    releaseWakeLock();
 
     session.commitToProfile();
 
@@ -459,7 +503,31 @@ export class Game {
     } else {
       this.audio.resume();
       this.loop.resetTiming();
+      // The browser drops the wake lock when the page is hidden and never
+      // restores it, so every return to the foreground has to ask again.
+      reacquireWakeLock();
     }
+  }
+
+  /**
+   * The system back gesture.
+   *
+   * It behaves like the in-game back button rather than like navigation: close
+   * the top screen, or open the pause menu if a raid is running with nothing
+   * open. It never leaves the page.
+   */
+  private onSystemBack(): void {
+    if (this.screens.isOpen) {
+      const top = this.screens.top;
+      if (top?.onBack?.()) return;
+      this.screens.pop();
+      return;
+    }
+    if (this.state === 'raid') {
+      this.screens.push('pause');
+      return;
+    }
+    if (this.state === 'hideout') this.screens.push('settings');
   }
 
   // =========================================================================

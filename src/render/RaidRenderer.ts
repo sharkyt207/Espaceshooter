@@ -8,6 +8,7 @@ import { SpriteRenderer } from './SpriteRenderer';
 import { SpriteLibrary, frameIndexFor, type CharacterSheet, type SpriteFrame } from './Sprites';
 import { TextureAtlas } from './Textures';
 import { PerfGovernor } from '../core/Loop';
+import { detectDeviceTier, initialRenderScale } from '../platform/Platform';
 
 /**
  * RaidRenderer - assembles a frame.
@@ -46,7 +47,14 @@ export class RaidRenderer {
   private readonly spriteRenderer = new SpriteRenderer();
 
   readonly camera: Camera = createCamera();
-  readonly governor = new PerfGovernor(60, 0.8, 0.45, 1);
+  /**
+   * The starting scale is a guess from the device's reported cores and memory;
+   * the governor measures the truth within a second or two and overrides it
+   * either way. The guess only exists because those first seconds are the
+   * player's first impression, and a mid-range phone that opens at full
+   * resolution stutters through them before there is any data to act on.
+   */
+  readonly governor = new PerfGovernor(60, initialRenderScale(detectDeviceTier()), 0.45, 1);
 
   /** Fixed render scale from settings; 0 means let the governor decide. */
   fixedScale = 0;

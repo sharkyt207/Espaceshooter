@@ -51,6 +51,10 @@ export class ScreenManager {
     }
     this.screens.set(screen.id, screen);
     screen.root.classList.add('hidden');
+    // Tagged so a hit test can say which screen a point actually landed on -
+    // which is the only way to catch a screen that is present but painting
+    // underneath another one.
+    screen.root.dataset.screen = screen.id;
     this.container.appendChild(screen.root);
   }
 
@@ -66,6 +70,22 @@ export class ScreenManager {
     return this.top?.id === id;
   }
 
+  /**
+   * Paint order follows the stack, not the DOM.
+   *
+   * Every screen is `position: absolute; inset: 0`, so without this the screen
+   * that paints on top is simply the last one appended to the container - and
+   * `register` re-appends, which it has to do when a new profile rebuilds the
+   * hideout. The result was a pushed screen silently rendering *underneath*
+   * the one it was pushed over. Driving z-index from the stack index makes the
+   * order mean what it says regardless of how the DOM ended up.
+   */
+  private restack(): void {
+    for (const [index, screen] of this.stack.entries()) {
+      screen.root.style.zIndex = String(20 + index);
+    }
+  }
+
   /** Replace the whole stack with a single screen. */
   show(id: string): void {
     const screen = this.screens.get(id);
@@ -76,6 +96,7 @@ export class ScreenManager {
     }
     this.stack = [screen];
     screen.root.classList.remove('hidden');
+    this.restack();
     screen.onShow?.();
     this.onChange(screen);
   }
@@ -89,6 +110,7 @@ export class ScreenManager {
     // a hard cut, and the hideout backdrop stays visible behind a dialog.
     this.stack.push(screen);
     screen.root.classList.remove('hidden');
+    this.restack();
     screen.onShow?.();
     this.onChange(screen);
   }
@@ -97,7 +119,9 @@ export class ScreenManager {
     const screen = this.stack.pop();
     if (!screen) return;
     screen.root.classList.add('hidden');
+    screen.root.style.zIndex = '';
     screen.onHide?.();
+    this.restack();
     this.onChange(this.top);
   }
 
@@ -105,6 +129,7 @@ export class ScreenManager {
   closeAll(): void {
     for (const s of this.stack) {
       s.root.classList.add('hidden');
+      s.root.style.zIndex = '';
       s.onHide?.();
     }
     this.stack.length = 0;

@@ -33,6 +33,7 @@ Netzwerk-URL steht in der Konsole).
 ```bash
 npm run typecheck    # TypeScript ohne Emit
 npm run test         # Simulationstests (89 Tests, Node Test Runner)
+npm run viewports    # Layoutprüfung auf fünf echten Telefongrößen
 npm run build        # Produktionsbundle nach dist/
 npm run verify       # typecheck + test + build
 npm run preview      # Produktionsbundle lokal ausliefern
@@ -65,6 +66,7 @@ Benötigt Playwright (`npm i -D playwright`). Screenshots landen im `--out`-Ordn
 | LADEN / MODUS | Nachladen bzw. Ladehemmung beheben, Feuermodus wechseln |
 | HALT / WECHS / MED | Haltung wechseln, Waffe wechseln, Medizin anwenden |
 | LAMPE | Waffenlampe ein- und ausschalten |
+| Zurück-Geste | Schließt den obersten Bildschirm, verlässt nie das Spiel |
 | AKTION | Behälter durchsuchen, Leiche plündern |
 | ◀ ▶ | Nach links/rechts lehnen |
 | INV / KARTE / MENÜ | Inventar, Sektorkarte, Pausenmenü |

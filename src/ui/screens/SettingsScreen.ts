@@ -1,6 +1,7 @@
 import { button, clear, el } from '../Dom';
 import { screenShell, type Screen } from '../ScreenManager';
 import type { GameSettings } from '../../save/SaveSystem';
+import { haptic, hapticsSupported } from '../../platform/Platform';
 
 /**
  * SettingsScreen - performance, controls and audio.
@@ -21,6 +22,7 @@ export class SettingsScreen implements Screen {
       onClose: () => void;
       onApply: (settings: GameSettings) => void;
       onResetProfile: () => void;
+      onShowPrimer: () => void;
     },
   ) {
     const shell = screenShell('Einstellungen', 'Steuerung, Darstellung und Ton', () => actions.onClose());
@@ -95,6 +97,23 @@ export class SettingsScreen implements Screen {
       ),
     );
 
+    // Only offered where it can actually do something. A dead switch is worse
+    // than a missing one - it makes the player think the feature is broken.
+    if (hapticsSupported()) {
+      content.appendChild(
+        this.toggleRow(
+          'Vibration',
+          'Kurze Rückmeldung bei Treffern, Verwundungen und Extraktion.',
+          this.settings.haptics,
+          (v) => {
+            this.settings.haptics = v;
+            this.apply();
+            if (v) haptic('hit');
+          },
+        ),
+      );
+    }
+
     content.appendChild(this.section('Ton'));
     content.appendChild(
       this.sliderRow('Lautstärke', this.settings.masterVolume, 0, 1, (v) => {
@@ -110,6 +129,15 @@ export class SettingsScreen implements Screen {
     );
 
     content.appendChild(this.section('Profil'));
+    content.appendChild(
+      el('div', { class: 'list-row' }, [
+        el('div', { class: 'grow' }, [
+          el('div', { class: 'title', text: 'Erste Schritte' }),
+          el('div', { class: 'sub', text: 'Die vier Regeln, die Ausrüstung kosten, wenn man sie nicht kennt.' }),
+        ]),
+        button('Anzeigen', () => this.actions.onShowPrimer(), 'btn small'),
+      ]),
+    );
     content.appendChild(
       el('div', { class: 'list-row' }, [
         el('div', { class: 'grow' }, [

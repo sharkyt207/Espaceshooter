@@ -18,6 +18,15 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="description" content="Mobiler PvE-Extraction-Shooter - technischer Prototyp." />
     <meta name="color-scheme" content="dark" />
+    <meta name="apple-mobile-web-app-title" content="Grayzone" />
+    <!--
+      Installing to the home screen is not a nicety on this game, it is the
+      only way to get the browser chrome out of the way on iPhone: Safari has
+      no fullscreen API there, and its toolbars cost roughly 15 % of a
+      landscape viewport that is already short.
+    -->
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <!-- Inline favicon: keeps the build asset-free and the console clean. -->
     <link
       rel="icon"
