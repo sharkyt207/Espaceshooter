@@ -52,6 +52,9 @@ export interface RenderSettings {
   /** Exponential fog density per tile. Sells depth and hides the draw distance. */
   fogDensity: number;
   fogColor: number;
+  /** Sky ramp, zenith and horizon, packed 0xRRGGBB. */
+  skyTop: number;
+  skyHorizon: number;
   /** Global exposure multiplier applied after lighting. */
   exposure: number;
   /** Max ray length in tiles. */
@@ -69,6 +72,8 @@ export function defaultRenderSettings(): RenderSettings {
   return {
     fogDensity: 0.055,
     fogColor: 0x2a3038,
+    skyTop: 0x2c343e,
+    skyHorizon: 0x8c989e,
     exposure: 1.0,
     viewDistance: 42,
     floorRowStep: 1,
@@ -95,6 +100,26 @@ export class Raycaster {
   private fogR = 0;
   private fogG = 0;
   private fogB = 0;
+
+  // --- weapon light --------------------------------------------------------
+  //
+  // The beam is a real cone in the scene, not a screen overlay: it brightens
+  // the same lightmap term the world is already shaded by, so it lights walls,
+  // floors and people the way a light should, and it is occluded by geometry
+  // for free because anything behind a wall was never drawn.
+  //
+  // The cone test lives in *tangent space*. For this projection both
+  // `cameraX * planeLen` (horizontal) and `(y - horizon) / height` (vertical)
+  // are exactly the tangent of the angle off the view axis, so a circular cone
+  // is one squared-radius compare per pixel with no trigonometry at all.
+  private torchStrength = 0;
+  private torchRange = 0;
+  private torchLut = new Float32Array(256);
+  private torchTanInner2 = 0;
+  private torchTanOuter2 = 0;
+  private torchInvSpan2 = 1;
+  /** Squared horizontal tangent per column; rebuilt per frame (FOV changes). */
+  private colTan2!: Float32Array;
 
   /** Per-column transparent layer scratch, flat for cache friendliness. */
   private layerDist!: Float32Array;
@@ -133,6 +158,7 @@ export class Raycaster {
     this.depth = new Float32Array(n);
 
     const cols = this.width;
+    this.colTan2 = new Float32Array(cols);
     this.layerDist = new Float32Array(cols * MAX_LAYERS_PER_COLUMN);
     this.layerTex = new Int32Array(cols * MAX_LAYERS_PER_COLUMN);
     this.layerU = new Float32Array(cols * MAX_LAYERS_PER_COLUMN);
@@ -168,14 +194,88 @@ export class Raycaster {
   /** Vertical sky ramp, recomputed on resize/settings change. */
   private buildSkyGradient(): void {
     this.skyGradient = new Uint32Array(this.height);
+    const top = this.settings.skyTop;
+    const horizon = this.settings.skyHorizon;
+    const tr = (top >> 16) & 0xff;
+    const tg = (top >> 8) & 0xff;
+    const tb = top & 0xff;
+    const hr = (horizon >> 16) & 0xff;
+    const hg = (horizon >> 8) & 0xff;
+    const hb = horizon & 0xff;
     for (let y = 0; y < this.height; y++) {
+      // Cold at zenith, brighter haze near the horizon. The endpoints come
+      // from the raid conditions, so a night sky is a night sky everywhere.
       const t = y / this.height;
-      // Overcast industrial sky: cold at zenith, warmer haze near the horizon.
-      const r = 44 + t * 96;
-      const g = 52 + t * 100;
-      const b = 62 + t * 96;
+      const r = tr + (hr - tr) * t;
+      const g = tg + (hg - tg) * t;
+      const b = tb + (hb - tb) * t;
       this.skyGradient[y] = (255 << 24) | ((b | 0) << 16) | ((g | 0) << 8) | (r | 0);
     }
+  }
+
+  /**
+   * Configure the weapon light.
+   *
+   * @param strength  additive brightness at the hot spot, 0 = off
+   * @param rangeTiles  distance at which the beam has died out completely
+   * @param halfAngle  outer cone half-angle in radians
+   */
+  setTorch(strength: number, rangeTiles: number, halfAngle = 0.42): void {
+    this.torchStrength = strength > 0 ? strength : 0;
+    this.torchRange = rangeTiles;
+    if (this.torchStrength <= 0 || rangeTiles <= 0) return;
+
+    const tanOuter = Math.tan(halfAngle);
+    const tanInner = Math.tan(halfAngle * 0.42);
+    this.torchTanInner2 = tanInner * tanInner;
+    this.torchTanOuter2 = tanOuter * tanOuter;
+    this.torchInvSpan2 = 1 / Math.max(1e-4, this.torchTanOuter2 - this.torchTanInner2);
+
+    for (let i = 0; i < this.torchLut.length; i++) {
+      const d = (i / (this.torchLut.length - 1)) * rangeTiles;
+      const t = d / rangeTiles;
+      // Three things at once: the beam does not light your own boots, it falls
+      // off roughly with the square of distance, and it reaches exactly zero at
+      // its stated range so there is no visible cut-off edge.
+      const near = d < 1 ? d : 1;
+      const inverseSquare = 1 / (1 + 2.4 * t * t);
+      const window = 1 - t * t * t * t;
+      this.torchLut[i] = strength * near * inverseSquare * (window > 0 ? window : 0);
+    }
+  }
+
+  /** Beam brightness at a distance, before the cone falloff is applied. */
+  private torchAt(dist: number): number {
+    if (this.torchStrength <= 0 || dist >= this.torchRange) return 0;
+    const i = (dist / this.torchRange) * (this.torchLut.length - 1);
+    return this.torchLut[i < 0 ? 0 : i | 0];
+  }
+
+  /**
+   * Cone falloff for a squared tangent-space radius from the beam axis.
+   * 1 inside the hot spot, ramping to 0 across the spill.
+   */
+  private torchCone(tan2: number): number {
+    if (tan2 <= this.torchTanInner2) return 1;
+    if (tan2 >= this.torchTanOuter2) return 0;
+    const t = (this.torchTanOuter2 - tan2) * this.torchInvSpan2;
+    // Squared for a soft edge rather than a hard-rimmed disc.
+    return t * t;
+  }
+
+  /**
+   * Beam contribution at a screen point.
+   *
+   * Sprites take one sample at their centre rather than per pixel: a person is
+   * either in your beam or they are not, and sampling them as a whole is both
+   * cheaper and reads better than a hard-edged cone slicing across a body.
+   */
+  beamAt(screenX: number, screenY: number, dist: number, horizon: number): number {
+    const strength = this.torchAt(dist);
+    if (strength <= 0) return 0;
+    const col = screenX < 0 ? 0 : screenX >= this.width ? this.width - 1 : screenX | 0;
+    const v = (screenY - horizon) / this.height;
+    return strength * this.torchCone(this.colTan2[col] + v * v);
   }
 
   /** Lookup fog factor for a distance in tiles. */
@@ -205,6 +305,18 @@ export class Raycaster {
 
     const horizon = h * 0.5 + cam.pitch;
     const camZ = cam.eyeHeight;
+
+    // Horizontal tangent per column. FOV changes when the player aims through
+    // an optic, so this is per frame rather than per resize - and it means a
+    // magnified sight genuinely narrows the beam's screen-space width.
+    if (this.torchStrength > 0) {
+      const cols = this.width;
+      const invHalf = 2 / cols;
+      for (let x = 0; x < cols; x++) {
+        const t = (x * invHalf - 1) * planeLen;
+        this.colTan2[x] = t * t;
+      }
+    }
 
     this.renderFloorAndCeiling(cam, map, dirX, dirY, planeX, planeY, horizon, camZ, flashIntensity, time);
     this.renderWalls(cam, map, dirX, dirY, planeX, planeY, horizon, camZ, flashIntensity);
@@ -273,6 +385,12 @@ export class Raycaster {
       const fogBp = this.fogB * fog;
       // Transient light falls off with the square of distance.
       const flashAdd = flash > 0 ? flash / (1 + rowDistance * rowDistance * 0.09) : 0;
+      // A floor row sits at a constant angle below the view axis, so the
+      // beam's vertical term is constant along it - the cone reduces to one
+      // squared radius per sample.
+      const torchRow = this.torchAt(rowDistance);
+      const vTan = camZ / rowDistance;
+      const vTan2 = vTan * vTan;
 
       const rowBase = y * w;
       // Light is sampled every 4 px: it varies per tile, not per pixel.
@@ -284,7 +402,8 @@ export class Raycaster {
         if ((x & 3) === 0) {
           const inBounds = cellX >= 0 && cellY >= 0 && cellX < mapW && cellY < map.height;
           const l = inBounds ? lightmap[cellY * mapW + cellX] / 255 : 0.1;
-          lightMul = (l + flashAdd) * exposure * invFog;
+          const beam = torchRow > 0 ? torchRow * this.torchCone(this.colTan2[x] + vTan2) : 0;
+          lightMul = (l + flashAdd + beam) * exposure * invFog;
         }
 
         const tileFloor = cellX >= 0 && cellY >= 0 && cellX < mapW && cellY < map.height
@@ -349,6 +468,9 @@ export class Raycaster {
       const fogGp = this.fogG * fog;
       const fogBp = this.fogB * fog;
       const flashAdd = flash > 0 ? flash / (1 + rowDistance * rowDistance * 0.09) : 0;
+      const torchRow = this.torchAt(rowDistance);
+      const vTan = (1 - camZ) / rowDistance;
+      const vTan2 = vTan * vTan;
 
       let lightMul = 1;
       const skyRow = this.skyColor(y, cam, time);
@@ -369,8 +491,9 @@ export class Raycaster {
 
         if ((x & 3) === 0) {
           const l = inBounds ? lightmap[cellY * mapW + cellX] / 255 : 0.1;
+          const beam = torchRow > 0 ? torchRow * this.torchCone(this.colTan2[x] + vTan2) : 0;
           // Ceilings read darker than floors; light rarely points up.
-          lightMul = (l * 0.72 + flashAdd) * exposure * invFog;
+          lightMul = (l * 0.72 + flashAdd + beam) * exposure * invFog;
         }
 
         const tex = atlas.texels[TILE_DEFS[ceilTile]?.texture ?? 1];
@@ -598,24 +721,58 @@ export class Raycaster {
     // Faces perpendicular to the view read darker - a cheap directional cue
     // that makes corners legible without a normal buffer.
     const sideShade = side === 1 ? 0.78 : 1;
-    const lightMul = (light * sideShade + flashAdd) * exposure * invFog;
+    const baseLight = light * sideShade + flashAdd;
+    const lightMul = baseLight * exposure * invFog;
+
+    // Beam on a wall is a disc, so unlike floors and ceilings the vertical
+    // term varies down the column. It steps by a constant, so tracking it is
+    // one add and one multiply per pixel - and only when a light is lit.
+    const torchDist = this.torchAt(dist);
+    const lit = torchDist > 0;
+    const hTan2 = lit ? this.colTan2[x] : 0;
+    const invH = 1 / h;
+    let vTan = lit ? (start - horizon) * invH : 0;
+    // The cone test is inlined below rather than calling torchCone(): this is
+    // the hottest loop in the renderer, and the early-out on the outer radius
+    // skips the work entirely for every pixel outside the beam - which, beam
+    // being a beam, is most of them.
+    const torchScale = torchDist * exposure * invFog;
+    const inner2 = this.torchTanInner2;
+    const outer2 = this.torchTanOuter2;
+    const invSpan2 = this.torchInvSpan2;
 
     let idx = start * w + x;
     const stride = w;
     for (let y = start; y <= end; y++, idx += stride) {
       if (blend && dist >= depth[idx]) {
         texPos += texStep;
+        if (lit) vTan += invH;
         continue;
       }
       const tv = texPos | 0;
       texPos += texStep;
+
+      let shade = lightMul;
+      if (lit) {
+        const t2 = hTan2 + vTan * vTan;
+        vTan += invH;
+        if (t2 < outer2) {
+          if (t2 <= inner2) {
+            shade += torchScale;
+          } else {
+            const edge = (outer2 - t2) * invSpan2;
+            shade += torchScale * edge * edge;
+          }
+        }
+      }
+
       const c = tex[(tv < 0 ? 0 : tv >= TEX_SIZE ? TEX_SIZE - 1 : tv) * TEX_SIZE + texColBase];
       const a = (c >>> 24) & 0xff;
       if (a === 0) continue;
 
-      const r = (c & 0xff) * lightMul + fogRp;
-      const g = ((c >> 8) & 0xff) * lightMul + fogGp;
-      const b = ((c >> 16) & 0xff) * lightMul + fogBp;
+      const r = (c & 0xff) * shade + fogRp;
+      const g = ((c >> 8) & 0xff) * shade + fogGp;
+      const b = ((c >> 16) & 0xff) * shade + fogBp;
 
       if (a === 255) {
         px[idx] = (255 << 24) |

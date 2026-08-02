@@ -125,8 +125,13 @@ const SPECS: AttachSpec[] = [
   // --- tactical -----------------------------------------------------------
   {
     id: 'att_light', name: 'Waffenlampe WL-1', short: 'WL-1', slot: 'tactical',
-    light: 7.5, ergo: -0.02, weight: 0.14, price: 8900, rarity: 'common', w: 1, h: 1,
-    desc: 'Taktische Lampe. Zeigt dir den Raum - und dem Raum dich.',
+    light: 10, ergo: -0.02, weight: 0.14, price: 8900, rarity: 'common', w: 1, h: 1,
+    desc: 'Taktische Lampe, rund 20 m nutzbar. Zeigt dir den Raum - und dem Raum dich.',
+  },
+  {
+    id: 'att_light_ir', name: 'Suchscheinwerfer WL-3', short: 'WL-3', slot: 'tactical',
+    light: 17, ergo: -0.05, weight: 0.31, price: 26400, rarity: 'uncommon', w: 1, h: 1,
+    desc: 'Doppelte Reichweite, doppelt so auffällig. Für Nachteinsätze auf offenem Gelände.',
   },
   {
     id: 'att_laser', name: 'Laserpointer LP-3', short: 'LP-3', slot: 'tactical',

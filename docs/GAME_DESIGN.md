@@ -52,6 +52,39 @@ schmerzfrei zu machen:
   Einsatz mit der Zweitwaffe.
 - Wer überlebt, hat die Prämie umsonst gezahlt.
 
+### Tageszeit und Wetter
+
+Die Absetzzeit wählt der Spieler, das Wetter würfelt der Einsatz-Seed. Beides
+zusammen ergibt eine Reihe von Multiplikatoren, die *jedes* System liest –
+Helligkeit der Karte, Nebeldichte, Sichtweite der KI, Reichweite von Geräuschen
+und die Auszahlung.
+
+| Zeit | Umgebungslicht | KI-Sicht | Ertrag |
+| --- | --- | --- | --- |
+| Tag | 100 % | 100 % | Grundwert |
+| Morgengrauen | 44 % | 80 % | +12 % |
+| Abenddämmerung | 34 % | 74 % | +20 % |
+| Nacht | 16 % | 50 % | +45 % |
+
+Wetter multipliziert zusätzlich: Nebel halbiert die Sicht, Regen dämpft Schall
+auf 70 %, Sturm auf 52 % und bringt Blitze, die die Karte für einen Moment
+tatsächlich beleuchten.
+
+Der Punkt ist nicht die Atmosphäre, sondern die Entscheidung, die daraus folgt.
+
+### Die Waffenlampe
+
+Nachts sieht man ohne Lampe fast nichts. Mit Lampe sieht man – und wird
+gesehen: Der Lichtkegel erhöht die Auffälligkeit des Spielers massiv und
+verlängert die Reichweite, auf der die KI ihn überhaupt entdecken kann, um bis
+zu 90 %. Der Effekt skaliert mit der Dunkelheit, eine Lampe am Tag kostet
+nichts und nützt nichts.
+
+Damit ist der Schalter selbst das Spiel: Licht an heißt schneller vorankommen
+und Beute finden, Licht aus heißt langsam tasten, aber unsichtbar bleiben.
+Deshalb ist die Lampe von Anfang an montiert – die interessante Entscheidung
+ist nicht, ob man eine besitzt, sondern wann man sie einschaltet.
+
 ### Ausgänge
 
 Vier Ausgänge, bewusst ungleich:

@@ -322,10 +322,16 @@ html, body {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  /* Without a gap a long value wraps flush against its label and the two read
+     as one word - "PrimärwaffeSG-545". */
+  gap: 12px;
   padding: 4px 0;
   font-size: 13px;
   border-bottom: 1px solid rgba(44, 51, 61, 0.5);
 }
+
+.stat-row .label { flex: 0 0 auto; }
+.stat-row .value { text-align: right; }
 
 .stat-row .label { color: var(--text-dim); }
 .stat-row .value { font-family: var(--mono); color: var(--text); }
@@ -519,6 +525,19 @@ html, body {
 
 .hud-contacts { font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); }
 .hud-contacts.hot { color: var(--bad); }
+
+/* Conditions sit between the clock and the contact count because they change
+   how both of those read: 40 metres of visibility makes a quiet map a lie. */
+.hud-conditions {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding: 0 12px;
+}
+
+.hud-conditions.dark { color: var(--accent); }
 
 /* --- compass ------------------------------------------------------------- */
 
@@ -794,6 +813,26 @@ html, body {
   font-size: 9px;
 }
 
+/* Left-hand side, out of the firing thumb's way: the light is a deliberate
+   act, never something you hit by accident while shooting. */
+.touch-btn.torch {
+  left: calc(18px + var(--safe-l));
+  bottom: calc(206px + var(--safe-b));
+  width: 46px;
+  height: 46px;
+  font-size: 9px;
+}
+
+.touch-btn.torch.active {
+  background: rgba(200, 145, 58, 0.45);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Dimmed rather than hidden: the player should know the button exists and
+   that the weapon in their hands has nothing to switch on. */
+.touch-btn.torch.unavailable { opacity: 0.3; }
+
 .touch-btn.lean-left {
   left: calc(18px + var(--safe-l));
   bottom: calc(150px + var(--safe-b));
@@ -982,6 +1021,46 @@ html, body {
   font-weight: 700;
   margin-top: 2px;
 }
+
+/* --- deployment: time of day --------------------------------------------- */
+
+.time-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.time-chip {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 8px 10px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.time-chip .name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  /* "Abenddämmerung" is long and must not spill out of its chip. */
+  overflow-wrap: anywhere;
+}
+
+.time-chip .bonus {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.time-chip.selected {
+  border-color: var(--accent);
+  background: rgba(200, 145, 58, 0.12);
+}
+
+.time-chip.selected .bonus { color: var(--accent); }
 
 /* ==========================================================================
    Compact layout for short viewports

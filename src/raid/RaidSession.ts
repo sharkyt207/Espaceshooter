@@ -1,7 +1,9 @@
 import type { GameBus, SoundEventPayload } from '../core/GameEvents';
 import { SpatialHash } from '../core/SpatialHash';
+import { Rng } from '../core/Random';
 import { clamp01, distance } from '../core/Math2D';
 import { generateMap, type GeneratedMap, type MapBlueprint } from '../world/MapGenerator';
+import { applyConditions, defaultConditions, type RaidConditions } from '../world/Conditions';
 import { CoverMap, NavGrid } from '../world/NavGrid';
 import type { TileMap } from '../world/TileMap';
 import { BallisticsSystem } from '../combat/Ballistics';
@@ -47,6 +49,10 @@ export interface RaidResult {
   /** Value that was left behind on death (secure container excluded). */
   lostValue: number;
   eventsSeen: string[];
+  /** "Nacht · Sturm" - what the player deployed into. */
+  conditions: string;
+  /** Reward multiplier those conditions were worth. */
+  conditionBonus: number;
 }
 
 export interface InteractionTarget {
@@ -96,6 +102,8 @@ export class RaidSession {
   private lastHitPart = new Map<number, BodyPart>();
 
   private readonly spatial: SpatialHash;
+  /** Own stream, so weather cannot perturb combat or loot rolls. */
+  private readonly weatherRng: Rng;
   private readonly disposers: (() => void)[] = [];
   private timeWarned = new Set<number>();
 
@@ -107,9 +115,13 @@ export class RaidSession {
     private readonly audio: AudioEngine,
     blueprint: MapBlueprint,
     seed: number,
+    readonly conditions: RaidConditions = defaultConditions(),
   ) {
     this.generated = generateMap(blueprint, seed);
     this.map = this.generated.map;
+    // Fold the sky for this time of day and weather into the baked lightmap.
+    // Layout is untouched, so the same seed is the same ground under any sky.
+    applyConditions(this.map, this.generated.ambient, conditions);
     this.nav = new NavGrid(this.map);
     this.cover = new CoverMap(this.map);
     this.timeLeft = this.generated.raidSeconds;
@@ -123,6 +135,7 @@ export class RaidSession {
     this.player = new Player(bus);
     this.playerWeapon = new WeaponController(bus, this.ballistics, this.player.id, true, seed);
     this.spatial = new SpatialHash(this.map.width, this.map.height, 6, 512);
+    this.weatherRng = new Rng(seed ^ 0x5747);
 
     this.setup();
   }
@@ -141,8 +154,12 @@ export class RaidSession {
     this.activeWeaponSlot = weapons[0]?.slot ?? 'primary';
     this.playerWeapon.setWeapon(weapons[0]?.stack ?? null, this.resolveContext(), true);
 
+    this.audio.setAmbience(this.conditions.precipitation, this.conditions.wind);
+
+    this.loot.dangerBonus = (this.conditions.rewardScale - 1) * 0.35;
     this.loot.populate(this.generated.lootAnchors, this.map);
     this.ai.populate(this.generated, this.map, this.generated.seed);
+    this.ai.sightScale = this.conditions.sightScale;
     this.extraction.load(this.generated.extracts);
 
     this.disposers.push(this.bus.on('sound:emit', (payload) => this.onSound(payload)));
@@ -171,6 +188,32 @@ export class RaidSession {
   dispose(): void {
     for (const d of this.disposers) d();
     this.disposers.length = 0;
+    this.audio.stopAmbience();
+  }
+
+  // =========================================================================
+  // Lightning
+  // =========================================================================
+
+  /**
+   * Additive world light from a strike, 0..1.
+   *
+   * This lives in the simulation rather than the renderer because it is not a
+   * screen effect: a strike lights the actual map for a moment, which shows you
+   * the yard you were about to cross. Driving it from the seeded RNG on the
+   * fixed timestep also keeps a replay of a given seed identical.
+   */
+  lightning = 0;
+  private nextStrike = 6;
+
+  private updateLightning(dt: number): void {
+    if (this.lightning > 0) this.lightning = Math.max(0, this.lightning - dt * 7);
+    if (!this.conditions.thunder) return;
+    this.nextStrike -= dt;
+    if (this.nextStrike > 0) return;
+    this.nextStrike = this.weatherRng.range(7, 23);
+    this.lightning = this.weatherRng.range(0.7, 1.2);
+    this.audio.playThunder();
   }
 
   // =========================================================================
@@ -222,6 +265,61 @@ export class RaidSession {
 
   toggleAds(): void {
     this.adsToggled = !this.adsToggled;
+  }
+
+  // =========================================================================
+  // Weapon light
+  // =========================================================================
+
+  /** Player's intent. Whether it does anything depends on the fitted weapon. */
+  torchWanted = false;
+
+  /** True when a light is actually fitted to the weapon in hand. */
+  get hasTorch(): boolean {
+    return (this.playerWeapon.resolved?.lightRadius ?? 0) > 0;
+  }
+
+  /** True when the light is fitted and switched on. */
+  get torchOn(): boolean {
+    return this.torchWanted && this.hasTorch;
+  }
+
+  /** Beam reach in tiles, 0 when the light is off. */
+  get torchRadius(): number {
+    return this.torchOn ? (this.playerWeapon.resolved?.lightRadius ?? 0) : 0;
+  }
+
+  /**
+   * How much the light gives the player away, 0..1.
+   *
+   * Scaled by how dark it is: a torch in daylight is invisible and costs
+   * nothing, at night it is the brightest thing on the map. That relationship
+   * is what turns the switch into a decision instead of a setting.
+   */
+  get torchGlow(): number {
+    if (!this.torchOn) return 0;
+    return clamp01(1 - this.conditions.ambientScale);
+  }
+
+  /** Returns false when the player has no light to switch on. */
+  toggleTorch(): boolean {
+    if (!this.hasTorch) {
+      this.bus.emit('ui:notify', { text: 'KEINE LAMPE AN DIESER WAFFE', tone: 'bad', duration: 2.5 });
+      return false;
+    }
+    this.torchWanted = !this.torchWanted;
+    this.bus.emit('ui:notify', {
+      text: this.torchWanted ? 'LAMPE AN' : 'LAMPE AUS',
+      tone: this.torchWanted ? 'warn' : 'info',
+      duration: 1.6,
+    });
+    // A click carries a few metres. Switching on next to a patrol is a
+    // mistake in itself, not just afterwards.
+    this.bus.emit('sound:emit', {
+      x: this.player.x, y: this.player.y, radius: 4, intensity: 0.12,
+      kind: 'container', sourceId: this.player.id,
+    });
+    return true;
   }
 
   private resolveContext(): ResolveContext {
@@ -302,6 +400,7 @@ export class RaidSession {
 
     // --- effects and world -------------------------------------------------
     this.effects.update(dt, this.map);
+    this.updateLightning(dt);
     this.events.update(dt, this.elapsed, this.raidFraction, {
       map: this.map,
       ai: this.ai,
@@ -321,6 +420,7 @@ export class RaidSession {
       (id) => this.resolveActor(id),
     );
 
+    this.ai.targetGlow = this.torchGlow;
     this.ai.update(
       dt,
       this.map,
@@ -397,6 +497,11 @@ export class RaidSession {
    * to exactly the same event.
    */
   private onSound(payload: SoundEventPayload): void {
+    // Weather is applied to the event itself rather than to each listener, so
+    // the AI and the mixer can never disagree about how far a shot carried.
+    const scale = this.conditions.soundScale;
+    if (scale !== 1) payload = { ...payload, radius: payload.radius * scale };
+
     this.ai.onSound(payload, this.map);
 
     const occlusion = estimateOcclusion(this.map, this.player.x, this.player.y, payload.x, payload.y);
@@ -419,7 +524,8 @@ export class RaidSession {
     if (!enemy) return;
 
     this.kills++;
-    const xp = enemy.profile.xpReward;
+    // Fighting in the dark or in a storm is harder, and pays accordingly.
+    const xp = Math.round(enemy.profile.xpReward * this.conditions.rewardScale);
     this.xpEarned += xp;
     this.profile.progression.addXp(xp, `Ausschaltung: ${enemy.name}`);
 
@@ -673,8 +779,9 @@ export class RaidSession {
       for (const stack of Object.values(this.player.inventory.equipped)) {
         if (stack) lootValue += stackValue(stack);
       }
-      this.profile.progression.addXp(600, 'Erfolgreiche Extraktion');
-      this.xpEarned += 600;
+      const extractXp = Math.round(600 * this.conditions.rewardScale);
+      this.profile.progression.addXp(extractXp, 'Erfolgreiche Extraktion');
+      this.xpEarned += extractXp;
       this.profile.quests.advance('extract', 1);
       if (extractName) {
         const ex = this.generated.extracts.find((e) => e.name === extractName);
@@ -699,6 +806,8 @@ export class RaidSession {
       extractName,
       lostValue,
       eventsSeen: [...this.events.fired],
+      conditions: this.conditions.label,
+      conditionBonus: this.conditions.rewardScale,
     };
 
     this.bus.emit('raid:ended', { survived, reason });

@@ -18,6 +18,7 @@ import { ResultsScreen } from '../ui/screens/ResultsScreen';
 import { SettingsScreen } from '../ui/screens/SettingsScreen';
 import { PauseScreen } from '../ui/screens/PauseScreen';
 import { blueprintById } from '../data/MapData';
+import { makeConditions, rollWeather, type TimeOfDayId } from '../world/Conditions';
 import { stackValue } from '../inventory/ItemStack';
 
 /**
@@ -120,7 +121,7 @@ export class Game {
 
     this.deployScreen = new DeployScreen(this.profile, {
       onBack: () => this.screens.pop(),
-      onDeploy: (mapId) => this.startRaid(mapId),
+      onDeploy: (mapId, time) => this.startRaid(mapId, time),
     });
 
     this.lootScreen = new LootScreen({
@@ -299,7 +300,7 @@ export class Game {
     });
     this.deployScreen = new DeployScreen(this.profile, {
       onBack: () => host.pop(),
-      onDeploy: (mapId) => this.startRaid(mapId),
+      onDeploy: (mapId, time) => this.startRaid(mapId, time),
     });
     this.resultsScreen = new ResultsScreen(this.profile, {
       onContinue: () => this.returnToHideout(),
@@ -320,16 +321,19 @@ export class Game {
   // Raid lifecycle
   // =========================================================================
 
-  private startRaid(mapId: string): void {
+  private startRaid(mapId: string, time: TimeOfDayId = 'day'): void {
     this.audio.unlock();
     this.audio.resume();
 
     const blueprint = blueprintById(mapId);
     // A fresh seed per deployment: the same location, a different arrangement.
     const seed = (Math.random() * 0xffffffff) >>> 0;
+    // The player chooses the hour; the sky is out of their hands. Rolling it
+    // from the seed keeps a deployment reproducible from its seed alone.
+    const conditions = makeConditions(time, rollWeather(seed >>> 3));
 
     this.riskAtDeploy = loadoutRiskValue(this.profile.loadout);
-    this.session = new RaidSession(bus, this.profile, this.audio, blueprint, seed);
+    this.session = new RaidSession(bus, this.profile, this.audio, blueprint, seed, conditions);
     this.lootScreen.bind(this.session);
     this.mapScreen.bind(this.session);
 
@@ -343,10 +347,17 @@ export class Game {
     this.input.clearActions();
 
     bus.emit('ui:notify', {
-      text: `${blueprint.displayName.toUpperCase()} - EINSATZ LÄUFT`,
+      text: `${blueprint.displayName.toUpperCase()} - ${conditions.label.toUpperCase()}`,
       tone: 'info',
       duration: 5,
     });
+    if (conditions.darkEnoughForLight) {
+      bus.emit('ui:notify', {
+        text: this.session.hasTorch ? 'LAMPE VERFÜGBAR - TASTE LAMPE' : 'KEINE LAMPE AN DER WAFFE',
+        tone: this.session.hasTorch ? 'info' : 'warn',
+        duration: 6,
+      });
+    }
   }
 
   private abandonRaid(): void {
@@ -493,6 +504,7 @@ export class Game {
     if (this.input.consumeAction('interact')) this.tryInteract();
     if (this.input.consumeAction('swapWeapon')) session.swapWeapon();
     if (this.input.consumeAction('fireMode')) session.cycleFireMode();
+    if (this.input.consumeAction('toggleLight')) session.toggleTorch();
     if (this.input.consumeAction('heal')) session.useMedical();
     if (this.input.consumeAction('inventory')) {
       this.lootScreen.render();

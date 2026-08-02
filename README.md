@@ -32,7 +32,7 @@ Netzwerk-URL steht in der Konsole).
 
 ```bash
 npm run typecheck    # TypeScript ohne Emit
-npm run test         # Simulationstests (80 Tests, Node Test Runner)
+npm run test         # Simulationstests (89 Tests, Node Test Runner)
 npm run build        # Produktionsbundle nach dist/
 npm run verify       # typecheck + test + build
 npm run preview      # Produktionsbundle lokal ausliefern
@@ -64,6 +64,7 @@ Benötigt Playwright (`npm i -D playwright`). Screenshots landen im `--out`-Ordn
 | FEUER / ZIEL | Schießen und Anschlagen |
 | LADEN / MODUS | Nachladen bzw. Ladehemmung beheben, Feuermodus wechseln |
 | HALT / WECHS / MED | Haltung wechseln, Waffe wechseln, Medizin anwenden |
+| LAMPE | Waffenlampe ein- und ausschalten |
 | AKTION | Behälter durchsuchen, Leiche plündern |
 | ◀ ▶ | Nach links/rechts lehnen |
 | INV / KARTE / MENÜ | Inventar, Sektorkarte, Pausenmenü |
@@ -73,7 +74,7 @@ Benötigt Playwright (`npm i -D playwright`). Screenshots landen im `--out`-Ordn
 `WASD` bewegen · `Shift` sprinten · Maus umsehen (Klick auf das Bild aktiviert
 die Mauszeigerbindung) · `LMB` feuern · `RMB` zielen · `R` nachladen ·
 `C` Haltung · `F` Aktion · `Q` Waffe wechseln · `V` Feuermodus · `H` Medizin ·
-`E` lehnen · `Tab` Inventar · `M` Karte · `Esc` Pause
+`E` lehnen · `L` Waffenlampe · `Tab` Inventar · `M` Karte · `Esc` Pause
 
 ---
 
@@ -83,6 +84,18 @@ die Mauszeigerbindung) · `LMB` feuern · `RMB` zielen · `R` nachladen ·
 Startpunkten, vier Ausgängen (einer frei, einer gegen Gebühr, einer per
 Schlüssel, einer nur in der zweiten Hälfte), Haltezeit an der Extraktion und
 vollständigem Ausrüstungsverlust bei Tod oder Abbruch.
+
+**Tageszeit und Wetter.** Die Absetzzeit wählt der Spieler (Tag, Morgengrauen,
+Abenddämmerung, Nacht), das Wetter würfelt der Einsatz-Seed (klar, bedeckt,
+Nebel, Regen, Sturm). Beides steuert dieselben Multiplikatoren: Helligkeit der
+Karte, Nebeldichte und -farbe, Himmel, Sichtweite der KI, Reichweite von
+Geräuschen und die Auszahlung. Nacht im Sturm zahlt rund 75 % mehr – und ist
+genau so viel schwerer.
+
+**Waffenlampe.** Ein echter Lichtkegel in der Szene, der Boden, Wände und
+Gegner beleuchtet und von Geometrie verdeckt wird. Eingeschaltet macht er den
+Spieler für die KI deutlich auffälliger und verlängert deren Entdeckungsreichweite
+um bis zu 90 %, skaliert mit der Dunkelheit. Der Schalter ist die Entscheidung.
 
 **Ballistik.** Echte Projektile mit Mündungsgeschwindigkeit, Luftwiderstand,
 Schwerkraft und Flugzeit. Materialabhängige Durchschlagsleistung durch dieselben
@@ -130,7 +143,8 @@ Entfernung, Richtung und Wandverdeckung bestimmen den Mix.
 src/
   core/        Schleife, Mathematik, RNG, Ereignisbus, Pools, Raumgitter
   data/        Gegenstände, Waffen, Munition, Anbauteile, Ausrüstung, Karten
-  world/       Kachelkarte, Kartengenerator, DDA-Raycast, Navigation, Physik
+  world/       Kachelkarte, Kartengenerator, DDA-Raycast, Navigation, Physik,
+               Einsatzbedingungen (Tageszeit und Wetter)
   render/      Software-Raycaster, prozedurale Texturen und Sprites, Effekte
   player/      Spielerfigur, Bewegung, Haltung, Ausdauer
   input/       Touch- und Tastatureingabe

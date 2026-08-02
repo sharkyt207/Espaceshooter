@@ -186,6 +186,12 @@ namespace Greyzone.Simulation.World
         public readonly byte[] Ceiling;
         /// <summary>Baked static light, 0..255.</summary>
         public readonly byte[] Lightmap;
+        /// <summary>
+        /// Lamp contribution only, without the sky. Kept separate so the time of
+        /// day can be changed by recombining the two instead of repeating the
+        /// bake, which costs a line-of-sight test per lit tile.
+        /// </summary>
+        public readonly byte[] LampLight;
         /// <summary>Zone id per tile, 0 = none.</summary>
         public readonly byte[] ZoneGrid;
 
@@ -200,6 +206,7 @@ namespace Greyzone.Simulation.World
             Floor = new byte[n];
             Ceiling = new byte[n];
             Lightmap = new byte[n];
+            LampLight = new byte[n];
             ZoneGrid = new byte[n];
             for (int i = 0; i < n; i++) Lightmap[i] = 180;
         }

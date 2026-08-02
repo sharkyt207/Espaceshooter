@@ -58,13 +58,20 @@ export class LootSystem {
     this.containers.length = 0;
   }
 
+  /**
+   * Added to every zone's danger rating when rolling contents. Raid conditions
+   * feed this: a location is worth searching more thoroughly at night, which is
+   * what makes the harder deployment worth taking.
+   */
+  dangerBonus = 0;
+
   /** Spawn every container described by the generated map. */
   populate(anchors: LootAnchor[], map: TileMap): void {
     for (const anchor of anchors) {
       const table = LOOT_TABLES[anchor.tableId];
       if (!table) continue;
       const zone = map.zoneAt(Math.floor(anchor.x), Math.floor(anchor.y));
-      const danger = zone?.danger ?? 0.25;
+      const danger = Math.min(1, (zone?.danger ?? 0.25) + this.dangerBonus);
       this.containers.push(this.createContainer(table, anchor.x, anchor.y, danger));
     }
   }

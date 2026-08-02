@@ -61,6 +61,11 @@ export interface PerceptionInput {
   hearingMultiplier: number;
   /** True while the observer is suppressed; tunnel vision reduces the cone. */
   suppressed: boolean;
+  /**
+   * Environmental multiplier on spotting range: darkness, fog and heavy rain
+   * all shorten it. 1 = clear daylight.
+   */
+  sightScale: number;
 }
 
 /**
@@ -76,15 +81,20 @@ export function updateVision(
   dt: number,
   targetSpeed: number,
   targetStance: number,
+  targetGlow = 0,
 ): void {
   awareness.timeSinceSeen += dt;
 
   const dist = distance(input.observerX, input.observerY, target.x, target.y);
   awareness.distance = dist;
 
+  // A lit torch is visible long past the range at which a body is, which is
+  // the whole reason carrying one is a decision rather than a free upgrade.
+  const sightRange = profile.sightRange * input.sightScale * (1 + targetGlow * 0.9);
+
   // --- gating ------------------------------------------------------------
   let detected = false;
-  if (target.alive && dist <= profile.sightRange) {
+  if (target.alive && dist <= sightRange) {
     const bearing = Math.atan2(target.y - input.observerY, target.x - input.observerX);
     // Suppression narrows the cone: people under fire stop scanning wide.
     const fov = profile.fovHalfAngle * (input.suppressed ? 0.6 : 1);
@@ -100,11 +110,12 @@ export function updateVision(
   if (detected) {
     // --- how conspicuous is the target right now? ------------------------
     // Distance: full strength up close, tapering to nothing at max range.
-    const distanceFactor = 1 - clamp01(dist / profile.sightRange) ** 1.5;
+    const distanceFactor = 1 - clamp01(dist / sightRange) ** 1.5;
     // Light: the lightmap the renderer uses is also what the AI "sees" by, so
-    // shadows are real cover, not a cosmetic effect.
+    // shadows are real cover, not a cosmetic effect. A torch overrides all of
+    // it - you cannot hide in a shadow you are illuminating.
     const light = map.lightAt(Math.floor(target.x), Math.floor(target.y)) / 255;
-    const lightFactor = 0.25 + light * 0.75;
+    const lightFactor = 0.25 + clamp01(light + targetGlow * 1.15) * 0.75;
     // Stance: prone is a fraction of the silhouette of a standing target.
     const stanceFactor = targetStance === 0 ? 0.34 : targetStance === 1 ? 0.62 : 1;
     // Movement draws the eye more than anything else.

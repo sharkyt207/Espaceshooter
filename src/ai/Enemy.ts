@@ -61,6 +61,10 @@ export interface AIWorldContext {
   targetSpeed: number;
   /** Player's stance 0-2. */
   targetStance: number;
+  /** How brightly the target is lighting themselves up, 0..1. */
+  targetGlow: number;
+  /** Environmental multiplier on spotting range - darkness, fog, rain. */
+  sightScale: number;
   /** Budgeted path request; returns null when the frame budget is exhausted. */
   requestPath: (fromX: number, fromY: number, toX: number, toY: number) => { x: number; y: number }[] | null;
   /** True when at least one squadmate is currently engaging. */
@@ -309,6 +313,9 @@ export class Enemy implements Combatant {
         observerAngle: this.angle,
         hearingMultiplier: this.inventory.stats.hearingFactor,
         suppressed: this.suppression > 0.4,
+        // Hearing is not range-gated by the weather here: the sound event
+        // itself already arrives with a shortened radius.
+        sightScale: 1,
       },
       sound,
       map,
@@ -363,12 +370,14 @@ export class Enemy implements Combatant {
         observerAngle: this.angle,
         hearingMultiplier: this.inventory.stats.hearingFactor,
         suppressed: this.suppression > 0.4,
+        sightScale: ctx.sightScale,
       },
       ctx.target,
       ctx.map,
       dt,
       ctx.targetSpeed,
       ctx.targetStance,
+      ctx.targetGlow,
     );
   }
 

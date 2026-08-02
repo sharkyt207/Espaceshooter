@@ -2,7 +2,7 @@ import type { GameBus } from '../core/GameEvents';
 import { GridContainer } from '../inventory/GridContainer';
 import { Inventory } from '../inventory/Inventory';
 import { createStack, defOf, stackValue, type ItemStack } from '../inventory/ItemStack';
-import { loadMagazine } from '../weapons/WeaponRuntime';
+import { attach, loadMagazine } from '../weapons/WeaponRuntime';
 import { Progression } from './Progression';
 import { TraderSystem } from './Traders';
 import { QuestSystem } from './Quests';
@@ -209,6 +209,10 @@ export class Profile {
     rifle.magazine = rifleMag;
     rifle.chamber = 'ammo_545_ps';
     rifle.durability = 74;
+    // The light comes fitted. Carrying one is not the interesting decision -
+    // switching it on in the dark, knowing what that costs, is, and a player
+    // who never finds the modification screen never reaches that decision.
+    attach(rifle, createStack('att_light'));
     this.loadout.equip('primary', rifle);
 
     const pistol = createStack('wp_pw9');
@@ -245,6 +249,8 @@ export class Profile {
     this.stash.add(createStack('drink_water', 2));
     this.stash.add(createStack('mat_scrap', 6));
     this.stash.add(createStack('mat_wire', 4));
+    // A spare for whatever they pick up next.
+    this.stash.add(createStack('att_light'));
 
     this.quests.refreshAvailability(this.progression.level);
     for (const id of ['kessler', 'marek', 'zoellner', 'sana'] as const) {

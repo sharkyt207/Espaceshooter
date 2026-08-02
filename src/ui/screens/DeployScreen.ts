@@ -2,10 +2,11 @@ import { button, clear, duration, el, money, weight as fmtWeight } from '../Dom'
 import { screenShell, type Screen } from '../ScreenManager';
 import type { Profile } from '../../meta/Profile';
 import { loadoutRiskValue } from '../../meta/Profile';
-import { MAP_BLUEPRINTS, MAP_BRIEFINGS } from '../../data/MapData';
+import { MAP_BLUEPRINTS, MAP_BRIEFINGS, MAP_NIGHT_NOTES } from '../../data/MapData';
 import { EQUIP_SLOTS, EQUIP_SLOT_LABEL } from '../../inventory/Inventory';
 import { defOf } from '../../inventory/ItemStack';
 import { totalRounds } from '../../weapons/WeaponRuntime';
+import { TIME_PROFILES, type TimeOfDayId } from '../../world/Conditions';
 
 /**
  * DeployScreen - the last chance to change your mind.
@@ -21,12 +22,13 @@ export class DeployScreen implements Screen {
   private body: HTMLElement;
   private subtitleEl: HTMLElement;
   private selectedMap = MAP_BLUEPRINTS[0].id;
+  private selectedTime: TimeOfDayId = 'day';
 
   constructor(
     private readonly profile: Profile,
     private readonly actions: {
       onBack: () => void;
-      onDeploy: (mapId: string) => void;
+      onDeploy: (mapId: string, time: TimeOfDayId) => void;
     },
   ) {
     const shell = screenShell('Einsatzplanung', '', () => actions.onBack());
@@ -78,10 +80,63 @@ export class DeployScreen implements Screen {
 
     // --- briefing -------------------------------------------------------------
     const blueprint = MAP_BLUEPRINTS.find((b) => b.id === this.selectedMap)!;
-    const briefing = el('div', { class: 'panel-body' }, [
-      el('div', { class: 'title', style: { fontSize: '15px', marginBottom: '6px' }, text: blueprint.displayName }),
-      el('div', { class: 'sub', style: { lineHeight: '1.55', color: '#8b95a3' }, text: MAP_BRIEFINGS[blueprint.id] ?? '' }),
-    ]);
+    const briefing = el('div', { class: 'panel-body' });
+
+    // --- time of day ----------------------------------------------------------
+    //
+    // The player picks the hour and takes what the sky gives them. The bonus is
+    // stated up front because the whole decision is "is that worth it to me",
+    // and hiding the number would make it guesswork instead of a judgement.
+    //
+    // It sits above the written briefing rather than below it: on a short
+    // landscape phone anything under a paragraph of text is below the fold, and
+    // a choice you have to scroll to find is a choice most players never make.
+    const timeRow = el('div', { class: 'time-row' });
+    for (const profile of TIME_PROFILES) {
+      const chosen = profile.id === this.selectedTime;
+      const bonus = Math.round((profile.rewardScale - 1) * 100);
+      const chip = el('div', { class: `time-chip${chosen ? ' selected' : ''}` }, [
+        el('div', { class: 'name', text: profile.label }),
+        el('div', { class: 'bonus', text: bonus > 0 ? `+${bonus} %` : 'Grundwert' }),
+      ]);
+      chip.addEventListener('click', () => {
+        this.selectedTime = profile.id;
+        this.render();
+      });
+      timeRow.appendChild(chip);
+    }
+    const timeProfile = TIME_PROFILES.find((t) => t.id === this.selectedTime)!;
+    briefing.append(
+      el('div', { class: 'panel-head', style: { border: 'none', padding: '0 0 6px' }, text: 'Absetzzeit' }),
+      timeRow,
+      el('div', { class: 'sub', style: { marginTop: '8px', color: '#8b95a3' }, text: timeProfile.blurb }),
+    );
+    if (this.selectedTime !== 'day') {
+      briefing.appendChild(
+        el('div', {
+          class: 'sub',
+          style: { marginTop: '6px', color: '#c8913a', lineHeight: '1.5' },
+          text: MAP_NIGHT_NOTES[blueprint.id] ?? '',
+        }),
+      );
+    }
+    briefing.append(
+      el('div', {
+        class: 'sub',
+        style: { marginTop: '6px', color: '#5b6472' },
+        text: 'Das Wetter vor Ort steht erst beim Absetzen fest.',
+      }),
+      el('div', {
+        class: 'panel-head',
+        style: { border: 'none', padding: '14px 0 6px' },
+        text: blueprint.displayName,
+      }),
+      el('div', {
+        class: 'sub',
+        style: { lineHeight: '1.55', color: '#8b95a3' },
+        text: MAP_BRIEFINGS[blueprint.id] ?? '',
+      }),
+    );
 
     // --- loadout summary ------------------------------------------------------
     const summary = el('div', { class: 'panel-body' });
@@ -152,7 +207,7 @@ export class DeployScreen implements Screen {
         el('div', { class: 'panel-head' }, [el('span', { text: 'Ausrüstung' })]),
         summary,
         el('div', { style: { padding: '10px' } }, [
-          button('Absetzen', () => this.actions.onDeploy(this.selectedMap), 'btn primary', {
+          button('Absetzen', () => this.actions.onDeploy(this.selectedMap, this.selectedTime), 'btn primary', {
             style: { width: '100%' } as never,
           }),
         ]),

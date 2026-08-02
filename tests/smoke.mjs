@@ -90,9 +90,44 @@ try {
   await page.getByRole('button', { name: 'Einsatz starten' }).click();
   await page.waitForTimeout(500);
   await shot('deploy');
+
+  // Deploy at night. This is the harder path through the game and the one that
+  // exercises the conditions system, the lightmap rebuild and the weapon light.
+  await page.locator('.time-chip', { hasText: 'Nacht' }).first().click();
+  await page.waitForTimeout(250);
+  await shot('deploy-night');
+
   await page.getByRole('button', { name: 'Absetzen' }).click();
   await page.waitForTimeout(2500);
   await shot('raid');
+
+  // --- the weapon light lights the world ------------------------------------
+  //
+  // Measured, not eyeballed: the beam feeds the same lightmap term the world
+  // is shaded by, so switching it on must measurably brighten the middle of
+  // the frame. A screenshot alone would not catch the beam silently going
+  // nowhere.
+  const conditions = await page.evaluate(() => window.game.session.conditions.label);
+  assert(conditions.startsWith('Nacht'), `expected a night raid, got ${conditions}`);
+  assert(
+    await page.evaluate(() => window.game.session.hasTorch),
+    'the starting rifle should have a light fitted',
+  );
+
+  const darkness = await centreBrightness(page);
+  await page.keyboard.press('KeyL');
+  await page.waitForTimeout(500);
+  await shot('raid-torch');
+  const lit = await centreBrightness(page);
+  assert(
+    await page.evaluate(() => window.game.session.torchOn),
+    'the light should be on after pressing L',
+  );
+  assert(
+    lit > darkness + 4,
+    `the beam should brighten the frame (dark ${darkness.toFixed(1)}, lit ${lit.toFixed(1)})`,
+  );
+  console.log(`torch: centre luminance ${darkness.toFixed(1)} -> ${lit.toFixed(1)}`);
 
   const inRaid = await page.evaluate(() => window.game.state);
   assert(inRaid === 'raid', `expected to be in a raid, state was ${inRaid}`);
@@ -186,6 +221,30 @@ console.log(`\nSmoke test passed. ${step} screenshots in ${OUT}`);
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+/**
+ * Mean luminance of the middle of the rendered frame.
+ * The raid canvas is a 2D context, so its pixels can be read back directly.
+ */
+async function centreBrightness(page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('.game-canvas');
+    const ctx = canvas.getContext('2d');
+    const w = Math.floor(canvas.width * 0.4);
+    const h = Math.floor(canvas.height * 0.4);
+    const data = ctx.getImageData(
+      Math.floor((canvas.width - w) / 2),
+      Math.floor((canvas.height - h) / 2),
+      w,
+      h,
+    ).data;
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      sum += data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    }
+    return sum / (data.length / 4);
+  });
 }
 
 /** Sample the loop's own statistics while the camera is moving. */

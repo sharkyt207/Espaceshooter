@@ -1106,26 +1106,19 @@ namespace Greyzone.Simulation.World
         /// Bakes static lighting into the tilemap.
         /// </summary>
         /// <remarks>
-        /// Outdoor tiles take the sky ambient; indoor tiles start dark and
-        /// accumulate each light with a line-of-sight test, so light does not
-        /// bleed through walls. Baking costs a few milliseconds once per raid and
-        /// turns per-frame lighting into a single array read - and the AI's
-        /// visibility model reads the same array, so shadows are real cover
-        /// rather than a cosmetic effect.
+        /// Lamps accumulate into their own layer with a line-of-sight test, so
+        /// light does not bleed through walls. The sky is not baked in: it is
+        /// folded on top by <see cref="Conditions.Apply"/>, which lets the time of
+        /// day change without repeating this pass - the expensive part is the
+        /// visibility test, and that does not depend on how bright the sky is.
+        ///
+        /// Baking costs a few milliseconds once per raid and turns per-frame
+        /// lighting into a single array read - and the AI's visibility model reads
+        /// the same array, so shadows are real cover rather than a cosmetic effect.
         /// </remarks>
         private static void BakeLighting(TileMap map, GeneratedMap gen, MapBlueprint bp)
         {
-            byte skyLevel = (byte)Math.Round(bp.Ambient * 255f);
-            byte indoorBase = (byte)Math.Round(bp.Ambient * 62f);
-
-            for (int y = 0; y < map.Height; y++)
-            {
-                for (int x = 0; x < map.Width; x++)
-                {
-                    int i = y * map.Width + x;
-                    map.Lightmap[i] = map.Ceiling[i] != 0 ? indoorBase : skyLevel;
-                }
-            }
+            Array.Clear(map.LampLight, 0, map.LampLight.Length);
 
             foreach (LightSource light in gen.Lights)
             {
@@ -1151,10 +1144,13 @@ namespace Greyzone.Simulation.World
                         if (!Raycast.HasLineOfSight(map, light.X, light.Y, x + 0.5f, y + 0.5f)) continue;
 
                         int i = y * map.Width + x;
-                        map.Lightmap[i] = (byte)Math.Min(255, map.Lightmap[i] + contribution);
+                        map.LampLight[i] = (byte)Math.Min(255, map.LampLight[i] + contribution);
                     }
                 }
             }
+
+            // Daylight by default, so a map is usable the moment it is generated.
+            Conditions.Apply(map, bp.Ambient, Conditions.Default());
         }
     }
 }

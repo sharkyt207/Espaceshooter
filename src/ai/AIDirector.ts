@@ -170,6 +170,18 @@ export class AIDirector {
     }
   }
 
+  /**
+   * Environmental spotting multiplier for the current raid conditions.
+   * Set once when the raid starts; read by every perception tick.
+   */
+  sightScale = 1;
+
+  /**
+   * How brightly the player is lighting themselves up, 0..1. Set per frame by
+   * the session, because it changes the moment a torch is switched on.
+   */
+  targetGlow = 0;
+
   /** Route a world sound to every enemy that could plausibly hear it. */
   onSound(sound: SoundEventPayload, map: TileMap): void {
     for (const enemy of this.enemies) {
@@ -226,6 +238,8 @@ export class AIDirector {
         target,
         targetSpeed: this.targetSpeed,
         targetStance: this.targetStance,
+        targetGlow: this.targetGlow,
+        sightScale: this.sightScale,
         requestPath: (fx, fy, tx, ty) => this.requestPath(nav, fx, fy, tx, ty),
         squadEngaged: squad?.engaged ?? false,
         alertSquad: (x, y) => this.alertSquad(enemy.id, x, y),

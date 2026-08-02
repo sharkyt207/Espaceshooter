@@ -1,6 +1,7 @@
 import { Rng } from '../core/Random';
 import { Tile, TileMap } from './TileMap';
 import { hasLineOfSight } from './Raycast';
+import { applyConditions, defaultConditions } from './Conditions';
 
 /**
  * MapGenerator - seeded procedural construction of raid locations.
@@ -939,21 +940,17 @@ function findFreeTile(
 /**
  * Bake static lighting into the tilemap.
  *
- * Outdoor tiles take the sky ambient. Indoor tiles start dark and accumulate
- * contribution from each light source with a line-of-sight test, so light does
- * not bleed through walls. Baking costs a few milliseconds once per raid and
- * makes per-frame lighting a single array read.
+ * Lamps are accumulated into their own layer with a line-of-sight test, so
+ * light does not bleed through walls. The sky is *not* baked in: it is folded
+ * on top by `applyConditions`, which lets the time of day change without
+ * repeating this pass - the expensive part is the visibility test, and that
+ * does not depend on how bright the sky is.
+ *
+ * Baking costs a few milliseconds once per raid and makes per-frame lighting a
+ * single array read.
  */
 function bakeLighting(map: TileMap, gen: GeneratedMap, bp: MapBlueprint): void {
-  const skyLevel = Math.round(bp.ambient * 255);
-  const indoorBase = Math.round(bp.ambient * 62);
-
-  for (let y = 0; y < map.height; y++) {
-    for (let x = 0; x < map.width; x++) {
-      const i = y * map.width + x;
-      map.lightmap[i] = map.ceiling[i] !== 0 ? indoorBase : skyLevel;
-    }
-  }
+  map.lampLight.fill(0);
 
   for (const light of gen.lights) {
     const r = Math.ceil(light.radius);
@@ -973,8 +970,11 @@ function bakeLighting(map: TileMap, gen: GeneratedMap, bp: MapBlueprint): void {
         if (contribution < 2) continue;
         if (!hasLineOfSight(map, light.x, light.y, x + 0.5, y + 0.5)) continue;
         const i = y * map.width + x;
-        map.lightmap[i] = Math.min(255, map.lightmap[i] + contribution);
+        map.lampLight[i] = Math.min(255, map.lampLight[i] + contribution);
       }
     }
   }
+
+  // Daylight by default, so a map is usable the moment it is generated.
+  applyConditions(map, bp.ambient, defaultConditions());
 }

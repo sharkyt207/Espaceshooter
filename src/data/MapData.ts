@@ -78,3 +78,19 @@ export const MAP_BRIEFINGS: Record<string, string> = {
     'Altes Kesselhaus, dunkel und beengt. Wenig Beute im Freien, dafür lohnende Innenräume. ' +
     'Ohne Licht am Lauf wirst du hier kaum etwas sehen - und mit Licht sieht man dich.',
 };
+
+/**
+ * How each location reads under a dark sky. Shown on the deployment screen
+ * once the player picks anything other than daylight, because "how bad is the
+ * dark here" is location-specific and worth knowing before committing.
+ */
+export const MAP_NIGHT_NOTES: Record<string, string> = {
+  harbour:
+    'Die Kaianlage hat funktionierende Flutlichter. Beleuchtete Flächen sind schnell zu queren ' +
+    'und machen dich zur Silhouette; der Rest des Geländes ist stockdunkel.',
+  depot:
+    'Kaum feste Beleuchtung. In den Containergassen entscheidet sich alles auf wenigen Metern - ' +
+    'wer zuerst Licht macht, wird zuerst gesehen.',
+  works:
+    'Notbeleuchtung im Kesselhaus, sonst nichts. Nachts ist das die dunkelste Karte im Sektor.',
+};

@@ -103,6 +103,19 @@ export class ResultsScreen implements Screen {
     ]);
     const detailBody = el('div', { class: 'panel-body' });
 
+    detailBody.appendChild(
+      el('div', { class: 'stat-row' }, [
+        el('span', { class: 'label', text: 'Bedingungen' }),
+        el('span', {
+          class: 'value',
+          text: result.conditionBonus > 1.01
+            ? `${result.conditions}  ·  +${Math.round((result.conditionBonus - 1) * 100)} %`
+            : result.conditions,
+          style: result.conditionBonus > 1.01 ? { color: '#c8913a' } : {},
+        }),
+      ]),
+    );
+
     if (result.extractName) {
       detailBody.appendChild(
         el('div', { class: 'stat-row' }, [

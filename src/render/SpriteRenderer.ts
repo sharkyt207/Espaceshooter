@@ -117,6 +117,8 @@ export class SpriteRenderer {
     exposure: number,
     flash: number,
     viewDistance: number,
+    /** Weapon-light contribution at a screen point, 0 when no light is lit. */
+    beamAt: (screenX: number, screenY: number, dist: number) => number = () => 0,
   ): void {
     if (this.count === 0) return;
 
@@ -187,7 +189,8 @@ export class SpriteRenderer {
       const fog = fogLut(tz);
       const invFog = 1 - fog;
       const flashAdd = flash > 0 ? flash / (1 + tz * tz * 0.09) : 0;
-      const lightMul = (light + flashAdd) * exposure * invFog;
+      const beam = beamAt(screenX, (yTop + yBottom) * 0.5, tz);
+      const lightMul = (light + flashAdd + beam) * exposure * invFog;
       const fogRp = fogRGB.r * fog;
       const fogGp = fogRGB.g * fog;
       const fogBp = fogRGB.b * fog;

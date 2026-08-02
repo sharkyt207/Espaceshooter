@@ -97,7 +97,7 @@ Die Welt ist ein gleichmäßiges Kachelgitter. Eine Kachel ist zwei Meter breit;
 Spiellogik rechnet in Kacheln, Ballistik rechnet in Metern.
 
 Alle Kacheldaten liegen in parallelen typisierten Arrays (`tiles`, `floor`,
-`ceiling`, `lightmap`, `zoneGrid`) statt in Objekten – genau diese Felder
+`ceiling`, `lightmap`, `lampLight`, `zoneGrid`) statt in Objekten – genau diese Felder
 werden vom Raycaster, der Navigation und der Beleuchtung in inneren Schleifen
 abgetastet.
 
@@ -119,6 +119,28 @@ passieren kann (und dabei die interessanten Layouts zu verlieren), wird der
 Fall erkannt und ein Durchbruch geschlagen – mit Materialkosten, die einen
 Maschendrahtzaun vor einer Betonwand bevorzugen. Startpunkte, Patrouillen und
 Beute werden anschließend auf die Hauptregion beschränkt.
+
+### Beleuchtung und Bedingungen
+
+Die Beleuchtung ist zweigeteilt, und zwar aus einem praktischen Grund: Der teure
+Anteil ist der Sichtbarkeitstest pro beleuchteter Kachel, und der hängt nicht
+davon ab, wie hell der Himmel ist.
+
+- `bakeLighting` backt einmal pro Einsatz den **Lampenanteil** in `lampLight`,
+  jeweils mit Sichtlinientest, damit Licht nicht durch Wände blutet.
+- `applyConditions` faltet daraus und dem Himmelslicht der aktuellen
+  Tageszeit die `lightmap`. Das ist ein linearer Durchlauf und kann jederzeit
+  erneut laufen.
+
+Straßenlaternen werden nachts **nicht** mit heruntergeregelt. Eine beleuchtete
+Fläche unter schwarzem Himmel ist der gefährlichste Boden der Karte – das
+funktioniert nur, wenn der Scheinwerfer hell bleibt, während alles andere
+dunkel wird.
+
+`Conditions` ist die einzige Tabelle, die Tageszeit und Wetter beschreibt.
+Renderer, KI-Wahrnehmung, Schallausbreitung und Auszahlung lesen dieselben
+Multiplikatoren. Kartenlayout ist davon unberührt: derselbe Seed erzeugt
+denselben Boden unter jedem Himmel.
 
 ### Navigation
 
@@ -163,6 +185,17 @@ Sprites (tiefengeprüft) → durchsichtige Flächen von hinten nach vorn.
 Beleuchtung und Nebel werden **pro Spalte beziehungsweise pro Zeile** berechnet,
 nicht pro Pixel: entlang einer Wandspalte und einer Bodenzeile sind sie konstant.
 Die innere Schleife besteht damit aus drei Multiplikationen und einem Speichern.
+
+Die Waffenlampe ist eine Ausnahme von der Regel „pro Spalte, pro Zeile“, und
+zwar eine überlegte. Sie ist ein echter Kegel in der Szene, kein Bildschirm-
+effekt: Sie addiert auf denselben Beleuchtungsterm, mit dem die Welt ohnehin
+schattiert wird, und wird dadurch kostenlos von Geometrie verdeckt. Der
+Kegeltest lebt im **Tangentenraum** – in dieser Projektion sind
+`cameraX * planeLen` und `(y - horizon) / height` exakt die Tangenten der
+Winkel zur Blickachse, ein Kreiskegel ist also ein Vergleich mit einem
+quadrierten Radius, ganz ohne Trigonometrie. Auf Böden und Decken ist der
+vertikale Anteil pro Zeile konstant; nur auf Wandspalten variiert er pro Pixel,
+dort läuft der Test inline mit einem frühen Ausstieg außerhalb des Kegels.
 
 Die Präsentation nutzt zwei Zeichenflächen: der Raycaster schreibt in ein
 `ImageData` in interner Auflösung, das skaliert auf die sichtbare Fläche
@@ -225,8 +258,9 @@ Schreiben mitten im Bild auf Mobilgeräten sichtbar ruckelt.
 
 ## Tests
 
-- **`tests/simulation.test.ts`** – 80 Tests über Determinismus, Geometrie,
-  Navigation, Inventarbuchführung, Schadensmodell und Wirtschaft. Läuft ohne
+- **`tests/simulation.test.ts`** – 89 Tests über Determinismus, Geometrie,
+  Navigation, Inventarbuchführung, Schadensmodell, Wirtschaft, Einsatz-
+  bedingungen und Wahrnehmung unter Licht und Wetter. Läuft ohne
   DOM über einen esbuild-Lader (Node kann Konstruktor-Parametereigenschaften
   nicht allein durch Typentfernung verarbeiten).
 - **`tests/smoke.mjs`** – vollständige Sitzung in echtem Chromium mit

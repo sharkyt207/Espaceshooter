@@ -29,6 +29,15 @@ import { Progression } from '../src/meta/Progression';
 import { Hideout } from '../src/meta/Hideout';
 import { QuestSystem } from '../src/meta/Quests';
 import { TraderSystem } from '../src/meta/Traders';
+import {
+  applyConditions,
+  makeConditions,
+  rollWeather,
+  WEATHER_PROFILES,
+} from '../src/world/Conditions';
+import { AI_PROFILES } from '../src/ai/AIProfiles';
+import { createAwareness, updateVision, type PerceptionInput } from '../src/ai/Perception';
+import type { Combatant } from '../src/combat/Combatant';
 
 /**
  * Simulation tests.
@@ -874,5 +883,162 @@ describe('TraderSystem', () => {
     assert.ok(t.states.kessler.reputation >= before);
     const remaining = t.states.kessler.offers[0]?.quantity ?? 0;
     assert.ok(remaining === quantity - 1 || quantity === 1);
+  });
+});
+
+// ===========================================================================
+// Raid conditions
+// ===========================================================================
+
+describe('Conditions', () => {
+  test('time and weather multipliers compose', () => {
+    const day = makeConditions('day', 'clear');
+    const night = makeConditions('night', 'storm');
+
+    assert.ok(night.ambientScale < day.ambientScale * 0.3, 'a stormy night is far darker');
+    assert.ok(night.sightScale < day.sightScale, 'and much harder to see in');
+    assert.ok(night.soundScale < day.soundScale, 'heavy rain shortens how far sound carries');
+    assert.ok(night.rewardScale > day.rewardScale * 1.3, 'and pays for the difficulty');
+    assert.ok(night.fogDensity > day.fogDensity);
+    assert.equal(day.darkEnoughForLight, false);
+    assert.equal(night.darkEnoughForLight, true);
+  });
+
+  test('the label names both halves, and omits clear weather', () => {
+    assert.equal(makeConditions('night', 'clear').label, 'Nacht');
+    assert.ok(makeConditions('night', 'rain').label.includes('Nacht'));
+    assert.ok(makeConditions('night', 'rain').label.includes('Regen'));
+  });
+
+  test('rollWeather is deterministic and covers the whole table', () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 400; i++) seen.add(rollWeather(i));
+    for (const profile of WEATHER_PROFILES) {
+      assert.ok(seen.has(profile.id), `weather ${profile.id} should be reachable`);
+    }
+    // Same roll, same weather - a deployment stays reproducible from its seed.
+    assert.equal(rollWeather(123456), rollWeather(123456));
+    // Negative rolls must not fall through to the default.
+    assert.ok(WEATHER_PROFILES.some((w) => w.id === rollWeather(-7)));
+  });
+
+  test('night darkens the sky without switching the lamps off', () => {
+    const map = new TileMap(16, 16);
+    map.tiles.fill(Tile.Floor);
+    const outdoor = map.index(2, 2);
+    const lamp = map.index(9, 9);
+    map.lampLight[lamp] = 200;
+
+    applyConditions(map, 0.66, makeConditions('day', 'clear'));
+    const dayOutdoor = map.lightmap[outdoor];
+    const dayLamp = map.lightmap[lamp];
+
+    applyConditions(map, 0.66, makeConditions('night', 'clear'));
+    const nightOutdoor = map.lightmap[outdoor];
+    const nightLamp = map.lightmap[lamp];
+
+    assert.ok(nightOutdoor < dayOutdoor * 0.3, 'open ground goes dark');
+    assert.ok(nightLamp > nightOutdoor * 3, 'a lit yard stays the brightest ground on the map');
+    assert.ok(nightLamp >= dayLamp * 0.9, 'street lighting is not dimmed by nightfall');
+  });
+
+  test('nothing is ever pure black', () => {
+    const map = new TileMap(8, 8);
+    map.tiles.fill(Tile.Floor);
+    map.ceiling.fill(1);
+    const night = makeConditions('night', 'storm');
+    applyConditions(map, 0.38, night);
+    for (let i = 0; i < map.lightmap.length; i++) {
+      assert.ok(map.lightmap[i] >= night.minLight, 'indoor tiles keep a readable floor');
+    }
+  });
+
+  test('conditions do not touch map layout', () => {
+    const blueprint = MAP_BLUEPRINTS[0];
+    const a = generateMap(blueprint, 4242);
+    const b = generateMap(blueprint, 4242);
+    applyConditions(b.map, b.ambient, makeConditions('night', 'fog'));
+    assert.deepEqual(Array.from(a.map.tiles), Array.from(b.map.tiles), 'same seed, same ground');
+    assert.deepEqual(a.extracts.map((e) => e.id), b.extracts.map((e) => e.id));
+  });
+});
+
+// ===========================================================================
+// Perception under light and weather
+// ===========================================================================
+
+describe('Perception', () => {
+  const openMap = (): TileMap => {
+    const map = new TileMap(64, 64);
+    map.tiles.fill(Tile.Floor);
+    map.lightmap.fill(20); // night
+    return map;
+  };
+
+  const target = (x: number, y: number): Combatant => ({
+    id: 99,
+    x,
+    y,
+    radius: 0.3,
+    height: 1.8,
+    eyeHeight: 1.6,
+    angle: 0,
+    health: null as never,
+    inventory: null as never,
+    isPlayer: true,
+    name: 'Ziel',
+    alive: true,
+  });
+
+  const observer = (sightScale: number): PerceptionInput => ({
+    observerX: 4,
+    observerY: 32,
+    observerAngle: 0,
+    hearingMultiplier: 1,
+    suppressed: false,
+    sightScale,
+  });
+
+  test('darkness shortens the range at which anything is spotted', () => {
+    const map = openMap();
+    const profile = AI_PROFILES.guard;
+    // Just inside daylight spotting range, well outside night range.
+    const spot = target(4 + profile.sightRange * 0.8, 32);
+
+    const byDay = createAwareness();
+    updateVision(byDay, profile, observer(1), spot, map, 1, 0, 2);
+    const byNight = createAwareness();
+    updateVision(byNight, profile, observer(0.5), spot, map, 1, 0, 2);
+
+    assert.ok(byDay.visible, 'visible in daylight');
+    assert.ok(!byNight.visible, 'the same target is not seen at night');
+  });
+
+  test('a switched-on torch is seen from beyond normal spotting range', () => {
+    const map = openMap();
+    const profile = AI_PROFILES.guard;
+    const spot = target(4 + profile.sightRange * 0.7, 32);
+
+    const dark = createAwareness();
+    updateVision(dark, profile, observer(0.5), spot, map, 1, 0, 2, 0);
+    const lit = createAwareness();
+    updateVision(lit, profile, observer(0.5), spot, map, 1, 0, 2, 0.85);
+
+    assert.ok(!dark.visible, 'unlit, the target stays inside the darkness');
+    assert.ok(lit.visible, 'a torch carries far past the range a body does');
+    assert.ok(lit.level > 0, 'and starts building awareness immediately');
+  });
+
+  test('a torch also destroys the benefit of standing in shadow', () => {
+    const map = openMap();
+    const profile = AI_PROFILES.guard;
+    const spot = target(12, 32);
+
+    const shadowed = createAwareness();
+    updateVision(shadowed, profile, observer(1), spot, map, 0.5, 0, 0);
+    const lit = createAwareness();
+    updateVision(lit, profile, observer(1), spot, map, 0.5, 0, 0, 1);
+
+    assert.ok(lit.level > shadowed.level * 1.5, 'the same crouched target is far more conspicuous');
   });
 });

@@ -507,9 +507,162 @@ export class AudioEngine {
     this.listener.deafness = clamp01(this.listener.deafness + amount);
   }
 
+  // =========================================================================
+  // Weather ambience
+  // =========================================================================
+
+  /**
+   * The continuous weather bed: rain and wind.
+   *
+   * Two looping noise sources rather than a sample, filtered differently -
+   * rain is broadband hiss with the low end rolled off, wind is a slow-moving
+   * low rumble. Both stay unspatialised, because weather has no direction.
+   *
+   * The bed is not just atmosphere. Rain is the reason the sound propagation
+   * multiplier drops in wet weather: the player hears less, and so does
+   * everyone hunting them.
+   */
+  private rainSource: AudioBufferSourceNode | null = null;
+  private rainGain: GainNode | null = null;
+  private windSource: AudioBufferSourceNode | null = null;
+  private windGain: GainNode | null = null;
+  private windLfo: OscillatorNode | null = null;
+  private wantRain = 0;
+  private wantWind = 0;
+
+  setAmbience(rain: number, wind: number): void {
+    this.wantRain = clamp01(rain);
+    this.wantWind = clamp01(wind);
+    this.applyAmbience();
+  }
+
+  stopAmbience(): void {
+    this.wantRain = 0;
+    this.wantWind = 0;
+    this.applyAmbience();
+  }
+
+  private applyAmbience(): void {
+    const ctx = this.ctx;
+    const master = this.master;
+    if (!ctx || !master || !this.noiseBuffer) return;
+    const t = ctx.currentTime;
+
+    if ((this.wantRain > 0 || this.wantWind > 0) && !this.rainSource) {
+      // --- rain: broadband hiss, low end removed -------------------------
+      const rainSrc = ctx.createBufferSource();
+      rainSrc.buffer = this.noiseBuffer;
+      rainSrc.loop = true;
+      const rainHigh = ctx.createBiquadFilter();
+      rainHigh.type = 'highpass';
+      rainHigh.frequency.value = 900;
+      const rainLow = ctx.createBiquadFilter();
+      rainLow.type = 'lowpass';
+      rainLow.frequency.value = 7000;
+      const rainGain = ctx.createGain();
+      rainGain.gain.value = 0;
+      rainSrc.connect(rainHigh);
+      rainHigh.connect(rainLow);
+      rainLow.connect(rainGain);
+      rainGain.connect(master);
+      rainSrc.start();
+      this.rainSource = rainSrc;
+      this.rainGain = rainGain;
+
+      // --- wind: slow low rumble, gain modulated by an LFO ---------------
+      const windSrc = ctx.createBufferSource();
+      windSrc.buffer = this.noiseBuffer;
+      windSrc.loop = true;
+      windSrc.playbackRate.value = 0.35;
+      const windFilter = ctx.createBiquadFilter();
+      windFilter.type = 'lowpass';
+      windFilter.frequency.value = 340;
+      const windGain = ctx.createGain();
+      windGain.gain.value = 0;
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.13;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.4;
+      lfo.connect(lfoGain);
+      lfoGain.connect(windGain.gain);
+      windSrc.connect(windFilter);
+      windFilter.connect(windGain);
+      windGain.connect(master);
+      windSrc.start();
+      lfo.start();
+      this.windSource = windSrc;
+      this.windGain = windGain;
+      this.windLfo = lfo;
+    }
+
+    if (this.rainGain) {
+      this.rainGain.gain.setTargetAtTime(this.wantRain * 0.1, t, 1.2);
+    }
+    if (this.windGain) {
+      this.windGain.gain.setTargetAtTime(this.wantWind * 0.075, t, 1.6);
+    }
+
+    if (this.wantRain === 0 && this.wantWind === 0 && this.rainSource) {
+      // Let the ramps finish before tearing the graph down.
+      const rainSrc = this.rainSource;
+      const windSrc = this.windSource;
+      const lfo = this.windLfo;
+      this.rainSource = null;
+      this.windSource = null;
+      this.windLfo = null;
+      this.rainGain = null;
+      this.windGain = null;
+      const stopAt = t + 2;
+      try {
+        rainSrc.stop(stopAt);
+        windSrc?.stop(stopAt);
+        lfo?.stop(stopAt);
+      } catch {
+        // Already stopped; nothing to do.
+      }
+    }
+  }
+
+  /**
+   * Thunder, delayed to imply distance.
+   *
+   * The strike lights the map instantly and the sound arrives seconds later,
+   * which is both correct and useful: the flash shows you the yard, and the
+   * delay tells you how far off the storm is.
+   */
+  playThunder(): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.noiseBuffer || !this.master) return;
+    const delay = fxRng.range(0.6, 3.2);
+    const duration = fxRng.range(2.2, 4);
+    if (!this.canPlay(delay + duration)) return;
+    const t = this.now + delay;
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.noiseBuffer;
+    src.playbackRate.value = 0.28;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(700, t);
+    filter.frequency.exponentialRampToValueAtTime(70, t + duration);
+    const gain = ctx.createGain();
+    // A slow swell rather than a hit: distant thunder rolls in.
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.22, t + duration * 0.22);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.master);
+    src.start(t, fxRng.range(0, 1));
+    src.stop(t + duration);
+  }
+
   update(dt: number): void {
     if (this.listener.deafness > 0) {
       this.listener.deafness = Math.max(0, this.listener.deafness - dt * 0.55);
     }
+    // The bed may have been requested before the context existed - the first
+    // raid can start in the same gesture that unlocks audio.
+    if ((this.wantRain > 0 || this.wantWind > 0) && !this.rainSource) this.applyAmbience();
   }
 }

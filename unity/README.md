@@ -3,9 +3,10 @@
 Portierung der Simulationsschicht des Web-Prototyps nach C#. Dieses Verzeichnis
 ist ein vollständiges Unity-Projekt – du öffnest es direkt im Hub.
 
-**Stand:** Fundament und Welt sind portiert und getestet. Kampf, Gegenstände,
-KI und Metaebene folgen; sie liegen weiterhin als lauffähige Referenz im
-TypeScript-Prototyp (`src/`).
+**Stand:** Fundament und Welt sind portiert und getestet, einschließlich der
+Einsatzbedingungen (Tageszeit und Wetter). Kampf, Gegenstände, KI und Metaebene
+folgen; sie liegen weiterhin als lauffähige Referenz im TypeScript-Prototyp
+(`src/`).
 
 ---
 
@@ -55,7 +56,8 @@ den Kachel-Switch durch Prefab-Lookups; alles andere bleibt.
 Assets/Greyzone/
   Simulation/          engine-unabhängig, referenziert kein UnityEngine
     Core/              Mathematik, RNG, Ereignisbus, Pools, Raumgitter, IDs
-    World/             Kacheln, Karte, Raycast, Bewegung, Navigation, Generator
+    World/             Kacheln, Karte, Raycast, Bewegung, Navigation, Generator,
+                       Bedingungen (Tageszeit und Wetter)
   Tests/               NUnit-Tests, laufen im Editor und headless
   Runtime/             Brücke zu Unity (MonoBehaviours)
 ```
@@ -81,8 +83,8 @@ Das ist kein zweiter Testsatz – es sind exakt dieselben `.cs`-Dateien, die Uni
 kompiliert, nur über ein separates Projekt eingebunden. Ein grüner Lauf sagt
 also etwas über den Code aus, der auch ausgeliefert wird.
 
-Aktuell **34 Tests**: Determinismus, Geometrie, Sichtlinien, Bewegung,
-Navigation und Kartenerzeugung.
+Aktuell **38 Tests**: Determinismus, Geometrie, Sichtlinien, Bewegung,
+Navigation, Kartenerzeugung und Einsatzbedingungen.
 
 Ein Test verdient besondere Erwähnung:
 `Rng_MatchesTheReferenceImplementation` prüft den Zufallsstrom gegen fest
@@ -105,6 +107,12 @@ verlieren ihren Wert.
 
 **Der Ereignisbus ist die Trennlinie.** Simulation veröffentlicht Nachrichten;
 Darstellung, Ton und UI hören zu. Nie umgekehrt.
+
+**Beleuchtung ist zweigeteilt.** `LampLight` hält den gebackenen Lampenanteil,
+`Conditions.Apply` faltet den Himmel der jeweiligen Tageszeit darüber. Wer das
+zusammenlegt, muss für jeden Wechsel der Tageszeit erneut pro beleuchteter
+Kachel eine Sichtlinie prüfen – und verliert nebenbei, dass Straßenlaternen
+nachts hell bleiben.
 
 **A\* hat eine geschlossene Menge.** Das ist keine Optimierung. Ohne sie werden
 veraltete Haufen-Duplikate erneut expandiert, die Suche verbrennt ihr

@@ -212,6 +212,12 @@ export class TileMap {
   readonly ceiling: Uint8Array;
   /** Baked static light 0..255, sampled per column by the renderer. */
   readonly lightmap: Uint8Array;
+  /**
+   * Lamp contribution only, without the sky. Kept separate so the time of day
+   * can be changed by recombining the two instead of repeating the bake, which
+   * costs a line-of-sight test per lit tile.
+   */
+  readonly lampLight: Uint8Array;
   /** Zone id per tile, 0 = none. */
   readonly zoneGrid: Uint8Array;
 
@@ -225,6 +231,7 @@ export class TileMap {
     this.floor = new Uint8Array(n);
     this.ceiling = new Uint8Array(n);
     this.lightmap = new Uint8Array(n).fill(180);
+    this.lampLight = new Uint8Array(n);
     this.zoneGrid = new Uint8Array(n);
   }
 

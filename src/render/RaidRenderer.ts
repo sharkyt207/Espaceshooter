@@ -70,6 +70,15 @@ export class RaidRenderer {
   private viewmodelRecoil = 0;
   private lastAngle = 0;
 
+  // --- weather -------------------------------------------------------------
+  /** Conditions the raycaster is currently configured for. */
+  private conditionsKey = '';
+  /** Mirror of the session's lightning, read once per frame. */
+  private lightningFlash = 0;
+  /** Rain streaks in screen space: x, y, length, speed per drop. */
+  private rain = new Float32Array(0);
+  private rainDrops = 0;
+
   constructor(container: HTMLElement) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'game-canvas';
@@ -174,12 +183,11 @@ export class RaidRenderer {
 
     this.updateCamera(session);
     this.updateScreenEffects(session, dt);
-
-    // Ambient light from dynamic events (a blackout genuinely darkens the map).
-    this.raycaster.applySettings({ exposure: session.lightMultiplier });
+    this.syncConditions(session);
 
     const cam = this.camera;
-    const flash = session.effects.flash;
+    const horizon = this.raycaster.horizonFor(cam);
+    const flash = session.effects.flash + this.lightningFlash;
     this.raycaster.render(cam, session.map, flash, session.elapsed);
 
     this.submitSprites(session);
@@ -200,8 +208,9 @@ export class RaidRenderer {
       settings.exposure,
       flash,
       settings.viewDistance,
+      (sx, sy, d) => this.raycaster.beamAt(sx, sy, d, horizon),
     );
-    this.raycaster.renderTransparentLayers(cam, this.raycaster.horizonFor(cam), flash);
+    this.raycaster.renderTransparentLayers(cam, horizon, flash);
 
     // Blit the internal buffer up to the display.
     this.offCtx.putImageData(this.raycaster.imageData, 0, 0);
@@ -209,9 +218,37 @@ export class RaidRenderer {
     this.ctx.drawImage(this.offscreen, 0, 0, this.displayWidth, this.displayHeight);
 
     // Sharp overlays on top.
+    this.drawPrecipitation(session);
     this.drawViewmodel(session);
     this.drawCrosshair(session);
     this.drawScreenEffects(session);
+  }
+
+  /**
+   * Push the raid's conditions into the renderer.
+   *
+   * Cheap to call every frame: the settings rebuild (fog LUT, sky ramp) only
+   * runs when something actually changed, which in practice is once per raid
+   * plus whenever a blackout switches the power off.
+   */
+  private syncConditions(session: RaidSession): void {
+    const cond = session.conditions;
+    const exposure = session.lightMultiplier;
+    const torchRadius = session.torchRadius;
+    const key = `${cond.label}|${exposure.toFixed(2)}|${torchRadius}`;
+    if (key !== this.conditionsKey) {
+      this.conditionsKey = key;
+      this.raycaster.applySettings({
+        fogDensity: cond.fogDensity,
+        fogColor: cond.fogColor,
+        skyTop: cond.skyTop,
+        skyHorizon: cond.skyHorizon,
+        exposure,
+      });
+      // Beam reach runs past the lit radius: a torch throws further than it
+      // usefully illuminates, and the dim outer spill is what you navigate by.
+      this.raycaster.setTorch(torchRadius > 0 ? 0.95 : 0, torchRadius * 1.5);
+    }
   }
 
   /** Mirrors the raycaster's fog curve for sprite shading. */
@@ -285,6 +322,53 @@ export class RaidRenderer {
     this.swayX = damp(this.swayX, targetSwayX, 7, dt);
     this.swayY = damp(this.swayY, targetSwayY, 7, dt);
     this.viewmodelRecoil = damp(this.viewmodelRecoil, 0, 9, dt);
+
+    this.updateWeather(session, dt, turnDelta);
+  }
+
+  /**
+   * Rain and lightning.
+   *
+   * Precipitation is drawn in screen space on the sharp overlay canvas rather
+   * than as world particles: it costs a few hundred line segments instead of
+   * thousands of depth-tested sprites, and at phone resolution the difference
+   * is invisible. Lightning is *not* cosmetic - it feeds the same additive
+   * world light the muzzle flash uses, so a strike genuinely lights the map
+   * and briefly shows you what is out there.
+   */
+  private updateWeather(session: RaidSession, dt: number, turnDelta: number): void {
+    const cond = session.conditions;
+    // The strike itself is simulated - see RaidSession.updateLightning.
+    this.lightningFlash = session.lightning;
+
+    const wanted = cond.precipitation > 0 ? Math.round(220 * cond.precipitation) : 0;
+    if (wanted !== this.rainDrops) {
+      this.rainDrops = wanted;
+      // 4 floats per drop: x, y, length, speed.
+      this.rain = new Float32Array(wanted * 4);
+      for (let i = 0; i < wanted; i++) {
+        this.rain[i * 4] = fxRng.float();
+        this.rain[i * 4 + 1] = fxRng.float();
+        this.rain[i * 4 + 2] = 0.03 + fxRng.float() * 0.05;
+        this.rain[i * 4 + 3] = 1.1 + fxRng.float() * 0.9;
+      }
+    }
+
+    if (this.rainDrops === 0) return;
+    // Turning drags the streaks sideways, which is what sells that they are in
+    // the world and not painted on the glass.
+    const drift = clamp(-turnDelta * 3.5, -0.4, 0.4);
+    for (let i = 0; i < this.rainDrops; i++) {
+      const o = i * 4;
+      this.rain[o + 1] += this.rain[o + 3] * dt;
+      this.rain[o] += drift * dt * 6;
+      if (this.rain[o + 1] > 1) {
+        this.rain[o + 1] -= 1;
+        this.rain[o] = fxRng.float();
+      }
+      if (this.rain[o] < -0.1) this.rain[o] += 1.2;
+      else if (this.rain[o] > 1.1) this.rain[o] -= 1.2;
+    }
   }
 
   // --- external notifications ----------------------------------------------
@@ -573,12 +657,43 @@ export class RaidRenderer {
     ctx.restore();
   }
 
+  /** Rain streaks over the finished frame. */
+  private drawPrecipitation(session: RaidSession): void {
+    if (this.rainDrops === 0) return;
+    const ctx = this.ctx;
+    const w = this.displayWidth;
+    const h = this.displayHeight;
+    const heavy = session.conditions.precipitation > 0.8;
+
+    ctx.save();
+    ctx.strokeStyle = heavy ? 'rgba(186,204,220,0.30)' : 'rgba(178,196,212,0.22)';
+    ctx.lineWidth = Math.max(1, h * 0.0016);
+    ctx.beginPath();
+    for (let i = 0; i < this.rainDrops; i++) {
+      const o = i * 4;
+      const x = this.rain[o] * w;
+      const y = this.rain[o + 1] * h;
+      const len = this.rain[o + 2] * h;
+      // Slight lean so the streaks read as falling, not as static scratches.
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + len * 0.16, y + len);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   /** Vignette, pain desaturation, damage flash and directional indicators. */
   private drawScreenEffects(session: RaidSession): void {
     const ctx = this.ctx;
     const w = this.displayWidth;
     const h = this.displayHeight;
     const health = session.player.health;
+
+    // Lightning washes the whole frame a moment after it lights the world.
+    if (this.lightningFlash > 0.02) {
+      ctx.fillStyle = `rgba(196,214,236,${Math.min(0.42, this.lightningFlash * 0.3)})`;
+      ctx.fillRect(0, 0, w, h);
+    }
 
     // Low health closes the frame in - a readable signal without a number.
     const healthFraction = clamp01(health.totalHp / health.totalMaxHp);

@@ -31,6 +31,7 @@ export class HUD {
   readonly root: HTMLElement;
 
   private timerEl!: HTMLElement;
+  private conditionsEl!: HTMLElement;
   private contactsEl!: HTMLElement;
   private compassTicks!: HTMLElement;
   private compassMarkers!: HTMLElement;
@@ -92,10 +93,13 @@ export class HUD {
   // =========================================================================
 
   private build(): void {
-    // --- top bar: raid clock and contact count ---------------------------
+    // --- top bar: raid clock, conditions and contact count ----------------
     this.timerEl = el('div', { class: 'hud-timer', text: '00:00' });
+    this.conditionsEl = el('div', { class: 'hud-conditions', text: '' });
     this.contactsEl = el('div', { class: 'hud-contacts', text: 'RUHIG' });
-    this.root.appendChild(el('div', { class: 'hud-top' }, [this.timerEl, this.contactsEl]));
+    this.root.appendChild(
+      el('div', { class: 'hud-top' }, [this.timerEl, this.conditionsEl, this.contactsEl]),
+    );
 
     // --- compass ----------------------------------------------------------
     this.compassTicks = el('div', { class: 'ticks' });
@@ -190,6 +194,7 @@ export class HUD {
     this.healBtn = make('heal', 'MED');
     this.swapBtn = make('swap', 'WECHS');
     this.fireModeBtn = make('firemode', 'MODUS');
+    this.torchBtn = make('torch', 'LAMPE');
     this.leanLeftBtn = make('lean-left', '◀');
     this.leanRightBtn = make('lean-right', '▶');
 
@@ -211,6 +216,7 @@ export class HUD {
   private healBtn!: HTMLElement;
   private swapBtn!: HTMLElement;
   private fireModeBtn!: HTMLElement;
+  private torchBtn!: HTMLElement;
   private leanLeftBtn!: HTMLElement;
   private leanRightBtn!: HTMLElement;
   private inventoryBtn!: HTMLElement;
@@ -229,6 +235,7 @@ export class HUD {
     this.input.bindTap(this.healBtn, 'heal');
     this.input.bindTap(this.swapBtn, 'swapWeapon');
     this.input.bindTap(this.fireModeBtn, 'fireMode');
+    this.input.bindTap(this.torchBtn, 'toggleLight');
     this.input.bindTap(this.inventoryBtn, 'inventory');
     this.input.bindTap(this.mapBtn, 'map');
     this.input.bindTap(this.pauseBtn, 'pause');
@@ -256,6 +263,17 @@ export class HUD {
     const contacts = session.ai.engagedCount;
     this.contactsEl.textContent = contacts === 0 ? 'RUHIG' : `${contacts} KONTAKT${contacts === 1 ? '' : 'E'}`;
     this.contactsEl.classList.toggle('hot', contacts > 0);
+
+    const conditions = session.conditions.label.toUpperCase();
+    if (this.conditionsEl.textContent !== conditions) {
+      this.conditionsEl.textContent = conditions;
+      this.conditionsEl.classList.toggle('dark', session.conditions.darkEnoughForLight);
+    }
+
+    // The torch button shows whether a light is fitted and whether it is lit -
+    // switching it on is a commitment, so its state must never be ambiguous.
+    this.torchBtn.classList.toggle('unavailable', !session.hasTorch);
+    this.torchBtn.classList.toggle('active', session.torchOn);
   }
 
   /**

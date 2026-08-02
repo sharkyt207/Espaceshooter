@@ -478,6 +478,63 @@ namespace Greyzone.Simulation.Tests
         }
 
         [Test]
+        public void ConditionsComposeTimeAndWeather()
+        {
+            RaidConditions day = Conditions.Make(TimeOfDay.Day, Weather.Clear);
+            RaidConditions night = Conditions.Make(TimeOfDay.Night, Weather.Storm);
+
+            Assert.Less(night.AmbientScale, day.AmbientScale * 0.3f, "a stormy night is far darker");
+            Assert.Less(night.SightScale, day.SightScale);
+            Assert.Less(night.SoundScale, day.SoundScale, "heavy rain shortens how far sound carries");
+            Assert.Greater(night.RewardScale, day.RewardScale * 1.3f, "and pays for the difficulty");
+            Assert.IsFalse(day.DarkEnoughForLight);
+            Assert.IsTrue(night.DarkEnoughForLight);
+            Assert.AreEqual("Nacht", Conditions.Make(TimeOfDay.Night, Weather.Clear).Label);
+        }
+
+        [Test]
+        public void RollWeatherIsDeterministicAndCoversTheTable()
+        {
+            var seen = new HashSet<Weather>();
+            for (int i = 0; i < 400; i++) seen.Add(Conditions.RollWeather(i));
+            foreach (WeatherProfile w in Conditions.Weathers)
+            {
+                Assert.IsTrue(seen.Contains(w.Id), $"weather {w.Id} should be reachable");
+            }
+            Assert.AreEqual(Conditions.RollWeather(123456), Conditions.RollWeather(123456));
+        }
+
+        [Test]
+        public void NightDarkensTheSkyWithoutSwitchingTheLampsOff()
+        {
+            var map = new TileMap(16, 16);
+            int outdoor = map.Index(2, 2);
+            int lamp = map.Index(9, 9);
+            map.LampLight[lamp] = 200;
+
+            Conditions.Apply(map, 0.66f, Conditions.Make(TimeOfDay.Day, Weather.Clear));
+            int dayOutdoor = map.Lightmap[outdoor];
+            int dayLamp = map.Lightmap[lamp];
+
+            Conditions.Apply(map, 0.66f, Conditions.Make(TimeOfDay.Night, Weather.Clear));
+            int nightOutdoor = map.Lightmap[outdoor];
+            int nightLamp = map.Lightmap[lamp];
+
+            Assert.Less(nightOutdoor, dayOutdoor * 0.3f, "open ground goes dark");
+            Assert.Greater(nightLamp, nightOutdoor * 3, "a lit yard stays the brightest ground");
+            Assert.GreaterOrEqual(nightLamp, dayLamp * 0.9f, "street lighting is not dimmed by nightfall");
+        }
+
+        [Test]
+        public void ConditionsDoNotTouchMapLayout()
+        {
+            GeneratedMap a = MapGenerator.Generate(MapCatalog.Blueprints[0], 4242);
+            GeneratedMap b = MapGenerator.Generate(MapCatalog.Blueprints[0], 4242);
+            Conditions.Apply(b.Map, b.Ambient, Conditions.Make(TimeOfDay.Night, Weather.Fog));
+            CollectionAssert.AreEqual(a.Map.Tiles, b.Map.Tiles, "same seed, same ground");
+        }
+
+        [Test]
         public void AiNeverSpawnsOnTopOfThePlayer()
         {
             GeneratedMap gen = MapGenerator.Generate(MapCatalog.Blueprints[0], 31337);
