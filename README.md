@@ -87,6 +87,16 @@ Startpunkten, vier Ausgängen (einer frei, einer gegen Gebühr, einer per
 Schlüssel, einer nur in der zweiten Hälfte), Haltezeit an der Extraktion und
 vollständigem Ausrüstungsverlust bei Tod oder Abbruch.
 
+**Händler als Menschen.** Jeder Händler und Auftraggeber hat ein eigenes,
+prozedural gezeichnetes Porträt - eine Art Dossierfoto mit hartem Seitenlicht,
+Duotone, Korn und Scanlines. Vier Originalfiguren, keine Bilddateien im Projekt.
+
+**Das Versteck als Ort.** Der Ausbau ist kein Modulzettel, sondern ein
+gezeichneter Querschnitt der Anlage: unausgebaute Räume sind dunkler Fels mit
+Schutt, laufende Ausbauten haben Gerüst und Arbeitslampe, fertige sind
+beleuchtet und mit modulspezifischer Einrichtung gefüllt, die mit der Stufe
+sichtbar wächst. Räume werden angetippt.
+
 **Tageszeit und Wetter.** Die Absetzzeit wählt der Spieler (Tag, Morgengrauen,
 Abenddämmerung, Nacht), das Wetter würfelt der Einsatz-Seed (klar, bedeckt,
 Nebel, Regen, Sturm). Beides steuert dieselben Multiplikatoren: Helligkeit der

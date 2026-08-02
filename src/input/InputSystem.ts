@@ -71,6 +71,16 @@ export class InputSystem {
   /** User-facing sensitivity multiplier from the settings screen. */
   sensitivity = 1;
   /** Invert vertical look. */
+  /**
+   * Y inversion, off by default.
+   *
+   * The sign convention runs the whole length of the chain and it is easy to
+   * get backwards, so it is worth stating: `pitch` is positive when looking
+   * *up*, everywhere - ballistics launches the round with `sin(pitch)`, recoil
+   * adds to it, and the renderer raises the horizon for it. Screen coordinates
+   * run the other way, y grows downward, so a downward drag has to *subtract*
+   * from pitch. Getting that backwards is what made dragging down look up.
+   */
   invertY = false;
 
   private actions = new Set<ActionName>();
@@ -149,7 +159,7 @@ export class InputSystem {
         this.lookPointer.lastY = e.clientY;
         const scale = LOOK_SENSITIVITY * this.sensitivity * (1 - this.adsFactor * (1 - ADS_SENSITIVITY_SCALE));
         this.state.lookX += dx * scale;
-        this.state.lookY += (this.invertY ? -dy : dy) * scale;
+        this.state.lookY += (this.invertY ? dy : -dy) * scale;
       }
     };
 
@@ -214,7 +224,7 @@ export class InputSystem {
       if (document.pointerLockElement !== this.pointerCaptureEl) return;
       const scale = LOOK_SENSITIVITY * this.sensitivity * (1 - this.adsFactor * (1 - ADS_SENSITIVITY_SCALE));
       this.state.lookX += e.movementX * scale;
-      this.state.lookY += (this.invertY ? -e.movementY : e.movementY) * scale;
+      this.state.lookY += (this.invertY ? e.movementY : -e.movementY) * scale;
     };
     const onMouseDown = (e: MouseEvent): void => {
       if (document.pointerLockElement !== this.pointerCaptureEl) return;

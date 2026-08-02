@@ -510,6 +510,10 @@ html, body {
   padding: 10px;
 }
 
+/* A block inside a panel body: no scrolling of its own, no padding, so
+   several can be stacked in one scroll container without fighting it. */
+.panel-inner { display: block; }
+
 .panel-body::-webkit-scrollbar { width: 6px; }
 .panel-body::-webkit-scrollbar-thumb { background: var(--line-bright); border-radius: 3px; }
 
@@ -928,9 +932,96 @@ html, body {
 .list-row .tag { flex: 0 0 auto; }
 
 /* Long unbreakable words in a narrow flex child overflow their box rather than
-   wrapping, and overflow in a flex row means overlapping siblings. */
+   wrapping, and overflow in a flex row means overlapping siblings.
+   `break-word` rather than `anywhere`: the latter also breaks ordinary words
+   mid-syllable the moment a column gets tight. */
 .list-row .title,
-.list-row .sub { overflow-wrap: anywhere; }
+.list-row .sub { overflow-wrap: break-word; }
+
+/* --- the base, drawn ----------------------------------------------------- */
+
+.base-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+  display: flex;
+}
+
+.base-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: var(--radius);
+  /* Rooms are tapped, so the browser must not treat a tap as the start of a
+     scroll or a double-tap zoom. */
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+/* --- people -------------------------------------------------------------- */
+
+.portrait {
+  display: block;
+  image-rendering: auto;
+}
+
+.trader-face {
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  line-height: 0;
+  /* Cropped to the head. The full canvas includes shoulders, which at list
+     size becomes an unreadable smear. */
+  align-self: flex-start;
+}
+
+.trader-face .portrait { margin-bottom: -14%; }
+.trader-face.small { border-color: transparent; opacity: 0.9; }
+
+.trader-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trader-header .face {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-bright);
+  border-radius: 3px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.trader-header .grow { flex: 1; min-width: 0; }
+
+.trader-header .name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.trader-header .role {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: 1px;
+}
+
+.trader-header .quote {
+  margin-top: 7px;
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
 
 /* --- shop rows ----------------------------------------------------------- */
 

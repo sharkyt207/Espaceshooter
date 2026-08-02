@@ -164,6 +164,33 @@ try {
   const inRaid = await page.evaluate(() => window.game.state);
   assert(inRaid === 'raid', `expected to be in a raid, state was ${inRaid}`);
 
+  // --- aiming is not inverted ----------------------------------------------
+  //
+  // Down means down. The sign runs through input, the player, ballistics and
+  // the horizon, and a flip anywhere along it is invisible in every other test
+  // - it just makes the game feel wrong.
+  const pitchAfterDrag = async (dy) =>
+    page.evaluate(async (dy) => {
+      const g = window.game;
+      g.session.player.pitch = 0;
+      const canvas = document.querySelector('.game-canvas');
+      const x = window.innerWidth * 0.75;
+      const y = window.innerHeight * 0.5;
+      const opts = (cx, cy) => ({ pointerId: 1, clientX: cx, clientY: cy, bubbles: true, isPrimary: true });
+      canvas.dispatchEvent(new PointerEvent('pointerdown', opts(x, y)));
+      canvas.dispatchEvent(new PointerEvent('pointermove', opts(x, y + dy)));
+      canvas.dispatchEvent(new PointerEvent('pointerup', opts(x, y + dy)));
+      await new Promise((r) => setTimeout(r, 120));
+      return g.session.player.pitch;
+    }, dy);
+
+  const draggedDown = await pitchAfterDrag(90);
+  assert(draggedDown < -0.01, `dragging down must look down, pitch was ${draggedDown.toFixed(3)}`);
+  const draggedUp = await pitchAfterDrag(-90);
+  assert(draggedUp > 0.01, `dragging up must look up, pitch was ${draggedUp.toFixed(3)}`);
+  await page.evaluate(() => { window.game.session.player.pitch = 0; });
+  console.log(`aim: drag down -> ${draggedDown.toFixed(3)} rad, drag up -> ${draggedUp.toFixed(3)} rad`);
+
   // --- play -----------------------------------------------------------------
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(1500);

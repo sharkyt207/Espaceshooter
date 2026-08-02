@@ -195,6 +195,23 @@ export class SpriteRenderer {
       const fogGp = fogRGB.g * fog;
       const fogBp = fogRGB.b * fog;
 
+      // Contact shadow.
+      //
+      // Without it every sprite hovers. A billboard's feet land on the correct
+      // floor pixel, but nothing darkens the floor around them, so the eye
+      // reads the whole figure as pasted on. One soft ellipse under the base
+      // costs a few hundred multiplies and is the single largest improvement
+      // available to a billboard renderer.
+      //
+      // Particles are excluded: a spark does not touch the ground.
+      if (frame && d.elevation < 0.05) {
+        drawContactShadow(
+          pixels, depthBuf, screenW, screenH,
+          screenX, yBottom, spriteW * 0.46, spriteW * 0.15,
+          tz, 0.55 * invFog,
+        );
+      }
+
       const tintR = (d.tint & 0xff) / 255;
       const tintG = ((d.tint >> 8) & 0xff) / 255;
       const tintB = ((d.tint >> 16) & 0xff) / 255;
@@ -280,6 +297,59 @@ export class SpriteRenderer {
           }
         }
       }
+    }
+  }
+}
+
+/**
+ * Darken the floor under a billboard.
+ *
+ * Multiplicative rather than an alpha blend against black, so the shadow keeps
+ * the colour of whatever it falls on - a shadow on rusted metal should stay
+ * rust-coloured. Falls off quadratically from the centre and is depth-tested
+ * against what is already drawn, so it does not spill onto a crate standing in
+ * front of the figure.
+ */
+function drawContactShadow(
+  pixels: Uint32Array,
+  depthBuf: Float32Array,
+  screenW: number,
+  screenH: number,
+  cx: number,
+  cy: number,
+  rx: number,
+  ry: number,
+  depth: number,
+  strength: number,
+): void {
+  if (rx < 1 || ry < 0.5) return;
+  const x0 = Math.max(0, Math.floor(cx - rx));
+  const x1 = Math.min(screenW, Math.ceil(cx + rx));
+  const y0 = Math.max(0, Math.floor(cy - ry));
+  const y1 = Math.min(screenH, Math.ceil(cy + ry));
+  if (x0 >= x1 || y0 >= y1) return;
+
+  const invRx2 = 1 / (rx * rx);
+  const invRy2 = 1 / (ry * ry);
+
+  for (let y = y0; y < y1; y++) {
+    const dy = y - cy;
+    const dy2 = dy * dy * invRy2;
+    let idx = y * screenW + x0;
+    for (let x = x0; x < x1; x++, idx++) {
+      const dx = x - cx;
+      const r2 = dx * dx * invRx2 + dy2;
+      if (r2 >= 1) continue;
+      // The shadow sits fractionally in front of the figure so it is not
+      // rejected by its own depth.
+      if (depth > depthBuf[idx] * 1.02) continue;
+      const fade = (1 - r2) * (1 - r2);
+      const mul = 1 - strength * fade;
+      const c = pixels[idx];
+      pixels[idx] = (255 << 24) |
+        ((((c >> 16) & 0xff) * mul) | 0) << 16 |
+        ((((c >> 8) & 0xff) * mul) | 0) << 8 |
+        (((c & 0xff) * mul) | 0);
     }
   }
 }

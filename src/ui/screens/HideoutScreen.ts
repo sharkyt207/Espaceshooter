@@ -14,6 +14,8 @@ import { TRADERS, type TraderId } from '../../meta/Traders';
 import { QUESTS } from '../../meta/Quests';
 import { SKILLS, MAX_SKILL_LEVEL, type SkillId } from '../../meta/Progression';
 import { attach, canAttach, detach, loadMagazine, resolveWeapon, totalRounds, unloadMagazine } from '../../weapons/WeaponRuntime';
+import { portraitNode } from '../../render/Portraits';
+import { BaseView, type RoomState } from '../../render/BaseView';
 
 /**
  * HideoutScreen - everything the player does between raids.
@@ -104,6 +106,11 @@ export class HideoutScreen implements Screen {
   private detailPanel: HTMLElement;
   private selected: { stack: ItemStack; source: GridSource } | null = null;
   private selectedTrader: TraderId = 'kessler';
+  private selectedModule: ModuleId = 'generator';
+  private readonly baseView = new BaseView();
+  /** Drives the small animations in the base view - flywheel, monitors. */
+  private baseClock = 0;
+  private baseRepaint = 0;
 
   constructor(
     private readonly profile: Profile,
@@ -133,6 +140,11 @@ export class HideoutScreen implements Screen {
     });
     this.detailPanel = el('div', { class: 'panel-body' });
 
+    this.baseView.onSelect = (id) => {
+      this.selectedModule = id;
+      this.renderContent();
+    };
+
     this.buildTabs();
   }
 
@@ -145,6 +157,18 @@ export class HideoutScreen implements Screen {
     // and crafts visibly progress instead of only advancing on load.
     this.profile.tick(dt);
     this.updateSubtitle();
+    if (this.activeTab === 'base') {
+      // The base view animates, but a flywheel and a few monitors do not need
+      // sixty frames a second - and a full-canvas redraw at that rate is heavy
+      // enough on a phone to starve touch handling. Twelve is smooth enough
+      // for what actually moves here.
+      this.baseClock += dt;
+      this.baseRepaint += dt;
+      if (this.baseRepaint >= 1 / 12) {
+        this.baseRepaint = 0;
+        this.drawBase();
+      }
+    }
     if (this.activeTab === 'base' || this.activeTab === 'craft' || this.activeTab === 'insurance') {
       // These tabs show live timers; re-render at a low rate.
       this.timerAccumulator += dt;
@@ -817,9 +841,12 @@ export class HideoutScreen implements Screen {
   // =========================================================================
 
   private renderBaseTab(): void {
-    const list = el('div', { class: 'panel-body' });
+    // The base itself, drawn. Everything below is the detail panel for
+    // whichever room is selected in it.
+    const view = el('div', { class: 'base-view' }, [this.baseView.canvas]);
+    const list = el('div', { class: 'panel-inner' });
 
-    for (const id of Object.keys(HIDEOUT_MODULES) as ModuleId[]) {
+    for (const id of [this.selectedModule] as ModuleId[]) {
       const def = HIDEOUT_MODULES[id];
       const state = this.profile.hideout.modules[id];
       const next = this.profile.hideout.nextLevelDef(id);
@@ -828,7 +855,7 @@ export class HideoutScreen implements Screen {
       );
 
       const rows: HTMLElement[] = [
-        el('div', { class: 'title', text: `${def.name}  ·  Stufe ${state.level}/${def.levels.length}` }),
+        el('div', { class: 'title', text: `Stufe ${state.level} / ${def.levels.length}` }),
         el('div', { class: 'sub', text: def.description }),
       ];
 
@@ -876,7 +903,7 @@ export class HideoutScreen implements Screen {
     }
 
     // --- character sheet ----------------------------------------------------
-    const skills = el('div', { class: 'panel-body' });
+    const skills = el('div', { class: 'panel-inner' });
     const p = this.profile.progression;
     skills.appendChild(
       el('div', { style: { marginBottom: '10px' } }, [
@@ -902,16 +929,68 @@ export class HideoutScreen implements Screen {
       );
     }
 
+    const selectedDef = HIDEOUT_MODULES[this.selectedModule];
     this.content.append(
-      el('div', { class: 'panel', style: { flex: '1.4' } }, [
-        el('div', { class: 'panel-head' }, [el('span', { text: 'Module' })]),
-        list,
+      el('div', { class: 'panel', style: { flex: '1.25' } }, [
+        el('div', { class: 'panel-head' }, [el('span', { text: 'Anlage' })]),
+        view,
       ]),
-      el('div', { class: 'panel', style: { flex: '1' } }, [
-        el('div', { class: 'panel-head' }, [el('span', { text: 'Operator' })]),
-        skills,
+      // One scroll container, not two stacked panel bodies - two of them each
+      // claim `flex: 1` and end up overlapping their own headings.
+      el('div', { class: 'panel', style: { flex: '1', minWidth: '210px' } }, [
+        el('div', { class: 'panel-head' }, [el('span', { text: selectedDef.name })]),
+        el('div', { class: 'panel-body' }, [
+          list,
+          el('div', {
+            class: 'panel-head',
+            style: { border: 'none', padding: '14px 0 4px', color: '#c8913a' },
+            text: 'Operator',
+          }),
+          skills,
+        ]),
       ]),
     );
+
+    this.paintBase();
+  }
+
+  /**
+   * Draw the base once, after a DOM rebuild.
+   *
+   * The canvas has no size until it is in the document and laid out, so the
+   * first draw can land in a zero-sized buffer and silently do nothing. One
+   * deferred repaint covers that - and it must be exactly one. Scheduling a
+   * frame from the per-tick path instead queues sixty full canvas redraws a
+   * second and locks the main thread solid.
+   */
+  private paintBase(): void {
+    this.drawBase();
+    requestAnimationFrame(() => this.drawBase());
+  }
+
+  /** Draw the base at its current state. Safe to call every frame. */
+  private drawBase(): void {
+    {
+      this.baseView.resize();
+      const rooms = new Map<ModuleId, RoomState>();
+      const powered = this.profile.hideout.levelOf('generator') > 0;
+      for (const id of Object.keys(HIDEOUT_MODULES) as ModuleId[]) {
+        const def = HIDEOUT_MODULES[id];
+        const state = this.profile.hideout.modules[id];
+        const total = def.levels[state.buildingLevel - 1]?.buildSeconds ?? 1;
+        rooms.set(id, {
+          id,
+          name: def.name,
+          level: state.level,
+          maxLevel: def.levels.length,
+          buildProgress: state.buildingLevel > 0 ? 1 - state.buildRemaining / total : -1,
+          buildingLevel: state.buildingLevel,
+          // The generator powers itself; everything else needs it running.
+          powered: id === 'generator' ? state.level > 0 : powered,
+        });
+      }
+      this.baseView.render(rooms, this.selectedModule, this.baseClock);
+    }
   }
 
   // =========================================================================
@@ -1007,12 +1086,15 @@ export class HideoutScreen implements Screen {
       const def = TRADERS[id];
       const state = this.profile.traders.states[id];
       const tier = this.profile.traders.tierFor(id);
-      const row = el('div', { class: `list-row clickable${id === this.selectedTrader ? ' selected' : ''}` }, [
+      const face = portraitNode(id, 0.26);
+      const row = el('div', { class: `list-row clickable trader-row${id === this.selectedTrader ? ' selected' : ''}` }, [
+        face ? el('div', { class: 'trader-face' }, [face]) : null,
         el('div', { class: 'grow' }, [
           el('div', { class: 'title', text: def.name, style: { color: def.color } }),
-          el('div', { class: 'sub', text: `${def.role} · Rang ${tier + 1} · Ruf ${state.reputation}` }),
+          el('div', { class: 'sub', text: def.role }),
+          el('div', { class: 'sub', text: `Rang ${tier + 1} · Ruf ${state.reputation}` }),
         ]),
-      ]);
+      ].filter(Boolean) as HTMLElement[]);
       row.style.borderColor = id === this.selectedTrader ? def.color : '';
       row.addEventListener('click', () => {
         this.selectedTrader = id;
@@ -1025,8 +1107,18 @@ export class HideoutScreen implements Screen {
     const state = this.profile.traders.states[this.selectedTrader];
 
     const stock = el('div', { class: 'panel-body' });
+    // The trader is a person you are standing in front of, so they get a
+    // portrait and their own words rather than a category header.
+    const bigFace = portraitNode(this.selectedTrader, 0.42);
     stock.appendChild(
-      el('div', { class: 'sub', style: { fontStyle: 'italic', marginBottom: '10px', color: '#8b95a3' }, text: `"${def.greeting}"` }),
+      el('div', { class: 'trader-header' }, [
+        bigFace ? el('div', { class: 'face', style: { borderColor: def.color } }, [bigFace]) : null,
+        el('div', { class: 'grow' }, [
+          el('div', { class: 'name', text: def.name, style: { color: def.color } }),
+          el('div', { class: 'role', text: def.role }),
+          el('div', { class: 'quote', text: `"${def.greeting}"` }),
+        ]),
+      ].filter(Boolean) as HTMLElement[]),
     );
     if (state.offers.length === 0) {
       stock.appendChild(el('div', { class: 'empty-note', text: 'Bestand erschöpft. Kommt später wieder.' }));
@@ -1138,7 +1230,9 @@ export class HideoutScreen implements Screen {
       const trader = TRADERS[quest.trader];
       const rows: HTMLElement[] = [
         el('div', { class: 'title', text: quest.title }),
-        el('div', { class: 'sub', text: `${trader.name} · Stufe ${quest.requiredLevel}` }),
+        // Whose job this is matters more than what level it needs, so the
+        // person is named in their own colour with their face beside it.
+        el('div', { class: 'sub', text: `${trader.name} · Stufe ${quest.requiredLevel}`, style: { color: trader.color } }),
       ];
 
       if (state.status === 'active') {
@@ -1194,8 +1288,10 @@ export class HideoutScreen implements Screen {
         }
       }
 
+      const giverFace = portraitNode(quest.trader, 0.22);
       list.appendChild(
-        el('div', { class: `list-row${state.status === 'locked' ? ' locked' : ''}` }, [
+        el('div', { class: `list-row quest-row${state.status === 'locked' ? ' locked' : ''}` }, [
+          giverFace ? el('div', { class: 'trader-face small' }, [giverFace]) : null,
           el('div', { class: 'grow' }, rows),
           action,
         ].filter(Boolean) as HTMLElement[]),

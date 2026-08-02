@@ -222,6 +222,7 @@ export class RaidRenderer {
 
     // Blit the internal buffer up to the display.
     this.offCtx.putImageData(this.raycaster.imageData, 0, 0);
+    this.drawGrain();
     this.ctx.imageSmoothingEnabled = true;
     this.ctx.drawImage(this.offscreen, 0, 0, this.displayWidth, this.displayHeight);
 
@@ -661,6 +662,67 @@ export class RaidRenderer {
         ctx.lineTo(cx + sx * r2, cy + sy * r2);
       }
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * Film grain.
+   *
+   * A tile of noise is baked once and blitted over the frame at a random
+   * offset. The honest way would be per-pixel noise every frame, which on a
+   * 1280x600 buffer is 768 000 random numbers and a visible slice of the frame
+   * budget; this is one drawImage and looks the same in motion.
+   *
+   * It matters more than it sounds on a software renderer: flat untextured
+   * gradients are the tell that a frame was computed rather than captured, and
+   * a little uniform noise across everything is what photographic images have
+   * and synthetic ones do not.
+   */
+  private grainTile: HTMLCanvasElement | null = null;
+
+  private buildGrain(): HTMLCanvasElement {
+    const size = 128;
+    const tile = document.createElement('canvas');
+    tile.width = size;
+    tile.height = size;
+    const ctx = tile.getContext('2d');
+    if (!ctx) return tile;
+    const image = ctx.createImageData(size, size);
+    const data = image.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const v = 128 + (Math.random() - 0.5) * 90;
+      data[i] = v;
+      data[i + 1] = v;
+      data[i + 2] = v;
+      data[i + 3] = 255;
+    }
+    ctx.putImageData(image, 0, 0);
+    return tile;
+  }
+
+  private drawGrain(): void {
+    if (!this.grainTile) this.grainTile = this.buildGrain();
+    // Applied to the *internal* buffer, not the display. Two reasons: it is a
+    // quarter of the pixels at typical render scales, and `overlay` is an
+    // expensive blend in software - the same pass on the display buffer cost
+    // roughly a third of the frame budget. Upscaling the grain with the frame
+    // also reads more like film than pin-sharp noise over a soft image.
+    const ctx = this.offCtx;
+    const w = this.internalWidth;
+    const h = this.internalHeight;
+    ctx.save();
+    ctx.globalCompositeOperation = 'overlay';
+    ctx.globalAlpha = 0.07;
+    const tile = this.grainTile;
+    const tw = tile.width;
+    const th = tile.height;
+    const ox = -Math.floor(Math.random() * tw);
+    const oy = -Math.floor(Math.random() * th);
+    for (let y = oy; y < h; y += th) {
+      for (let x = ox; x < w; x += tw) {
+        ctx.drawImage(tile, x, y);
+      }
     }
     ctx.restore();
   }
