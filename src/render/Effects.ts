@@ -1,6 +1,6 @@
 import { Pool } from '../core/Pool';
 import { fxRng } from '../core/Random';
-import type { SpriteRenderer } from './SpriteRenderer';
+import type { SpriteSink } from './SpriteSink';
 import type { TileMap } from '../world/TileMap';
 
 /**
@@ -163,7 +163,7 @@ export class EffectSystem {
   }
 
   /** Push every live particle and decal into the sprite queue. */
-  submit(sprites: SpriteRenderer): void {
+  submit(sprites: SpriteSink): void {
     for (let i = 0; i < this.particles.active; i++) {
       const p = this.particles.get(i);
       const t = p.life / p.maxLife;

@@ -36,6 +36,15 @@ export interface Camera {
   angle: number;
   /** Vertical look, in screen pixels of horizon offset. */
   pitch: number;
+  /**
+   * The same vertical look in radians.
+   *
+   * The software renderer wants pixels because its horizon is a scanline; the
+   * GL path wants radians because it builds a real view matrix. Both are kept
+   * so neither has to convert - and so a change to one can never silently
+   * disagree with the other.
+   */
+  pitchRad: number;
   /** Eye height in tile units above the floor (1 tile = wall height). */
   eyeHeight: number;
   /** Horizontal field of view in radians. */
@@ -45,7 +54,7 @@ export interface Camera {
 }
 
 export function createCamera(): Camera {
-  return { x: 0, y: 0, angle: 0, pitch: 0, eyeHeight: 0.52, fov: 1.28, roll: 0 };
+  return { x: 0, y: 0, angle: 0, pitch: 0, pitchRad: 0, eyeHeight: 0.52, fov: 1.28, roll: 0 };
 }
 
 export interface RenderSettings {

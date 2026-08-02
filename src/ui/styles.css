@@ -80,6 +80,14 @@ html, body {
   background: #0b0d10;
 }
 
+/* The overlay canvas carries the viewmodel, crosshair and screen effects on
+   top of the GL world. It must not paint its own background, or it would hide
+   everything behind it. */
+.game-canvas.overlay {
+  background: transparent;
+  z-index: 1;
+}
+
 /* ==========================================================================
    Rotation prompt - the game is landscape only
    ========================================================================== */

@@ -6,10 +6,12 @@ import type { RaidSession } from '../raid/RaidSession';
 import { createCamera, Raycaster, type Camera } from './Raycaster';
 import { SpriteRenderer } from './SpriteRenderer';
 import { SpriteLibrary, frameIndexFor, type CharacterSheet, type SpriteFrame } from './Sprites';
+import type { SpriteSink } from './SpriteSink';
 import { TextureAtlas } from './Textures';
 import { PerfGovernor } from '../core/Loop';
 import { PostProcess } from './PostProcess';
 import { detectDeviceTier, initialRenderScale } from '../platform/Platform';
+import { GLWorldRenderer } from './gl/GLWorldRenderer';
 
 /**
  * RaidRenderer - assembles a frame.
@@ -47,6 +49,17 @@ export class RaidRenderer {
   readonly raycaster: Raycaster;
   private readonly spriteRenderer = new SpriteRenderer();
   private readonly post = new PostProcess();
+
+  /**
+   * The hardware path, when the device provides one.
+   *
+   * Null means the software raycaster runs instead - not an error state, just
+   * the other branch. Everything above this class is identical either way.
+   */
+  private gl: GLWorldRenderer | null = null;
+  private glCanvas: HTMLCanvasElement | null = null;
+  /** Map the GL geometry was last built for, so it rebuilds once per raid. */
+  private glMapKey = '';
 
   readonly camera: Camera = createCamera();
   /**
@@ -105,12 +118,23 @@ export class RaidRenderer {
   private rain = new Float32Array(0);
   private rainDrops = 0;
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, preferGL = true) {
+    // The world canvas goes in first so the overlay canvas paints above it.
+    // Under GL the world is drawn here and the 2D canvas carries only the
+    // viewmodel, crosshair and screen effects; without GL this canvas is
+    // unused and the 2D one carries everything.
+    if (preferGL) {
+      this.glCanvas = document.createElement('canvas');
+      this.glCanvas.className = 'game-canvas';
+      container.appendChild(this.glCanvas);
+    }
+
     this.canvas = document.createElement('canvas');
-    this.canvas.className = 'game-canvas';
+    this.canvas.className = 'game-canvas overlay';
     container.appendChild(this.canvas);
 
-    const ctx = this.canvas.getContext('2d', { alpha: false });
+    // Transparent only when there is something behind it to show through.
+    const ctx = this.canvas.getContext('2d', { alpha: preferGL });
     if (!ctx) throw new Error('2D context unavailable');
     this.ctx = ctx;
 
@@ -121,6 +145,36 @@ export class RaidRenderer {
 
     this.raycaster = new Raycaster(this.atlas);
     this.buildSprites();
+
+    if (this.glCanvas) {
+      this.gl = GLWorldRenderer.create(this.glCanvas, this.atlas);
+      if (this.gl) {
+        this.gl.registerSprites(this.allSpriteFrames());
+      } else {
+        // Nothing to show behind the overlay, so take the canvas back out and
+        // let the software path own the screen.
+        this.glCanvas.remove();
+        this.glCanvas = null;
+        console.info('[render] WebGL2 unavailable - using the software renderer');
+      }
+    }
+  }
+
+  /** True when the hardware path is active. */
+  get usingGL(): boolean {
+    return this.gl !== null && !this.gl.failed;
+  }
+
+  get rendererName(): string {
+    return this.gl && !this.gl.failed ? this.gl.rendererName : 'Software';
+  }
+
+  /** Every baked frame, for the GPU sprite sheet. */
+  private allSpriteFrames(): SpriteFrame[] {
+    const frames: SpriteFrame[] = [];
+    for (const sheet of this.sprites.characters.values()) frames.push(...sheet.frames);
+    for (const prop of this.sprites.props.values()) frames.push(prop);
+    return frames;
   }
 
   /** Bake every character and prop billboard once at boot. */
@@ -174,6 +228,13 @@ export class RaidRenderer {
     this.canvas.style.width = `${cssWidth}px`;
     this.canvas.style.height = `${cssHeight}px`;
 
+    if (this.glCanvas) {
+      this.glCanvas.width = this.displayWidth;
+      this.glCanvas.height = this.displayHeight;
+      this.glCanvas.style.width = `${cssWidth}px`;
+      this.glCanvas.style.height = `${cssHeight}px`;
+    }
+
     this.applyRenderScale();
   }
 
@@ -212,11 +273,22 @@ export class RaidRenderer {
     this.syncConditions(session);
 
     const cam = this.camera;
-    const horizon = this.raycaster.horizonFor(cam);
     const flash = session.effects.flash + this.lightningFlash;
+
+    if (this.gl && !this.gl.failed) {
+      this.renderGL(session, flash);
+      this.drawPrecipitation(session);
+      this.drawViewmodel(session);
+      this.drawCrosshair(session);
+      this.drawScreenEffects(session);
+      return;
+    }
+
+    const horizon = this.raycaster.horizonFor(cam);
     this.raycaster.render(cam, session.map, flash, session.elapsed);
 
-    this.submitSprites(session);
+    this.spriteRenderer.begin();
+    this.submitSpritesTo(session, this.spriteRenderer);
     const settings = this.raycaster.renderSettings;
     this.spriteRenderer.render(
       cam,
@@ -260,6 +332,95 @@ export class RaidRenderer {
   }
 
   /**
+   * The hardware frame.
+   *
+   * Same camera, same lighting model, same conditions as the software path -
+   * the only difference is where the work happens. The 2D overlay canvas is
+   * cleared to transparent so the GL world shows through it.
+   */
+  private renderGL(session: RaidSession, flash: number): void {
+    const gl = this.gl;
+    if (!gl) return;
+    const cam = this.camera;
+    const settings = this.raycaster.renderSettings;
+    const cond = session.conditions;
+
+    // The GPU path obeys the same render-scale governor as the software one.
+    //
+    // This matters more here than it looks. The governor exists to hold the
+    // frame rate when a device cannot keep up, and it does that by shrinking
+    // the resolution the *scene* is rendered at. Sizing the GL targets to the
+    // full display would opt the GPU path out of that entirely: on a phone
+    // that thermal-throttles mid-raid there would be nothing left to give.
+    //
+    // Only the scene and bloom targets shrink. The canvas itself stays at
+    // display resolution and the composite pass upscales, so the HUD overlay
+    // and the crosshair stay sharp - the same arrangement as the software
+    // renderer's offscreen buffer and blit.
+    gl.resize(this.internalWidth, this.internalHeight, this.displayWidth, this.displayHeight);
+
+    // Geometry is per raid, not per frame. The seed identifies the map, and a
+    // blackout changes lighting without changing geometry, so the lightmap is
+    // re-uploaded separately whenever the conditions key moves.
+    const mapKey = `${session.generated.blueprintId}:${session.generated.seed}`;
+    if (mapKey !== this.glMapKey) {
+      this.glMapKey = mapKey;
+      gl.setMap(session.map);
+    } else if (this.lightmapDirty) {
+      gl.uploadLightmap(session.map);
+    }
+    this.lightmapDirty = false;
+
+    // --- sprites ----------------------------------------------------------
+    gl.beginSprites();
+    this.submitSpritesTo(session, gl);
+
+    // --- the frame --------------------------------------------------------
+    const torchRadius = session.torchRadius;
+    // Cone half-angles as cosines, matching the software beam.
+    const outer = Math.cos(0.42);
+    const inner = Math.cos(0.42 * 0.42);
+    const health = session.player.health;
+    const painVignette = clamp01(
+      (1 - clamp01(health.totalHp / health.totalMaxHp)) * 0.9 + health.modifiers.painIntensity * 0.4,
+    );
+
+    gl.bloomStrength = 0.7;
+    gl.vignette = 0.45 + painVignette * 0.9;
+    gl.render(session.map, {
+      camX: cam.x,
+      camY: cam.y,
+      camZ: cam.eyeHeight,
+      yaw: cam.angle,
+      pitch: cam.pitchRad,
+      roll: cam.roll,
+      // The camera's `fov` is horizontal; the projection wants vertical.
+      fovY: 2 * Math.atan(Math.tan(cam.fov / 2) / (this.displayWidth / this.displayHeight)),
+      aspect: this.displayWidth / this.displayHeight,
+      viewDistance: settings.viewDistance,
+      fogColor: cond.fogColor,
+      fogDensity: cond.fogDensity,
+      skyTop: cond.skyTop,
+      skyHorizon: cond.skyHorizon,
+      exposure: session.lightMultiplier,
+      flash,
+      torch: [torchRadius > 0 ? 0.95 : 0, torchRadius * 1.5, inner, outer],
+      time: session.elapsed,
+      overlay: [0.59, 0.08, 0.06, this.damageFlash * 0.32],
+    });
+
+    // Clear the overlay so the world is visible through it.
+    this.ctx.clearRect(0, 0, this.displayWidth, this.displayHeight);
+  }
+
+  /** Set whenever the lightmap changed and the GPU copy is stale. */
+  private lightmapDirty = false;
+
+  markLightmapDirty(): void {
+    this.lightmapDirty = true;
+  }
+
+  /**
    * Push the raid's conditions into the renderer.
    *
    * Cheap to call every frame: the settings rebuild (fog LUT, sky ramp) only
@@ -273,6 +434,7 @@ export class RaidRenderer {
     const key = `${cond.label}|${exposure.toFixed(2)}|${torchRadius}`;
     if (key !== this.conditionsKey) {
       this.conditionsKey = key;
+      this.lightmapDirty = true;
       this.raycaster.applySettings({
         fogDensity: cond.fogDensity,
         fogColor: cond.fogColor,
@@ -318,6 +480,9 @@ export class RaidRenderer {
     const pitchRad = clamp(player.pitch + (controller?.recoilPitch ?? 0), -0.7, 0.7);
     const bob = Math.sin(player.bobPhase) * (player.sprinting ? 5.5 : 3.0) * Math.min(1, player.speed);
     cam.pitch = this.internalHeight * Math.tan(pitchRad) + bob + this.shakeY;
+    // The GL path needs the angle, not the scanline offset. Bob and shake are
+    // folded back in as an angle so both renderers move identically.
+    cam.pitchRad = pitchRad + Math.atan((bob + this.shakeY) / Math.max(1, this.internalHeight));
 
     cam.eyeHeight = player.eyeHeightTiles;
     cam.roll = player.lean * 0.06;
@@ -426,8 +591,7 @@ export class RaidRenderer {
   // Sprite submission
   // =========================================================================
 
-  private submitSprites(session: RaidSession): void {
-    this.spriteRenderer.begin();
+  private submitSpritesTo(session: RaidSession, sink: SpriteSink): void {
     const cam = this.camera;
 
     // --- enemies ------------------------------------------------------------
@@ -441,7 +605,7 @@ export class RaidRenderer {
       const frame = sheet.frames[frameIndex];
       // Crouching enemies are physically smaller targets, and look it.
       const heightTiles = (enemy.height / METERS_PER_TILE) * (sheet.worldHeight / 0.92);
-      this.spriteRenderer.submit(enemy.x, enemy.y, frame, heightTiles);
+      sink.submit(enemy.x, enemy.y, frame, heightTiles);
     }
 
     // --- containers and corpses ---------------------------------------------
@@ -452,7 +616,7 @@ export class RaidRenderer {
       // what they have already been through.
       const tint = container.searched ? 0x707070 : 0xffffff;
       const heightTiles = container.isCorpse ? 0.24 : 0.5;
-      this.spriteRenderer.submit(container.x, container.y, frame, heightTiles, 0, tint);
+      sink.submit(container.x, container.y, frame, heightTiles, 0, tint);
     }
 
     // --- extraction markers --------------------------------------------------
@@ -461,12 +625,12 @@ export class RaidRenderer {
       for (const ex of session.extraction.extracts) {
         if (!ex.discovered) continue;
         const tint = ex.available ? 0xffffff : 0x4060a0;
-        this.spriteRenderer.submit(ex.def.x, ex.def.y, marker, 2.4, 0, tint, ex.available ? 0.85 : 0.4);
+        sink.submit(ex.def.x, ex.def.y, marker, 2.4, 0, tint, ex.available ? 0.85 : 0.4);
       }
     }
 
     // --- particles, tracers, decals ------------------------------------------
-    session.effects.submit(this.spriteRenderer);
+    session.effects.submit(sink);
   }
 
   // =========================================================================

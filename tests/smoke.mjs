@@ -39,9 +39,16 @@ const browser = await chromium.launch({
 });
 
 // A representative landscape phone viewport.
+//
+// Device pixel ratio 1, deliberately. This suite runs against SwiftShader -
+// WebGL rasterised on the CPU - and the GPU renderer at DPR 2 means four times
+// the fragments through a software rasteriser, which drags a night raid under
+// one frame per second and makes every timed step flaky. DPR 1 is not a gap in
+// coverage: layout at 2x and 3x is what `viewports.mjs` exists to check, and
+// nothing this suite asserts is resolution-dependent.
 const context = await browser.newContext({
   viewport: { width: 900, height: 414 },
-  deviceScaleFactor: 2,
+  deviceScaleFactor: 1,
 });
 const page = await context.newPage();
 
@@ -288,12 +295,27 @@ function assert(condition, message) {
 
 /**
  * Mean luminance of the middle of the rendered frame.
- * The raid canvas is a 2D context, so its pixels can be read back directly.
+ *
+ * Which canvas holds the world depends on the active renderer. The software
+ * path draws it straight onto `.game-canvas`; the GPU path renders into its
+ * own canvas and puts a transparent 2D overlay in front for the HUD, which is
+ * the one marked `.overlay`. Measuring the overlay would read a fully
+ * transparent image and every luminance assertion would compare zero to zero.
+ *
+ * A WebGL canvas has no 2D context to read from either, so the pixels come
+ * back through `drawImage` into a scratch canvas - which works for both
+ * backends and keeps this helper renderer-agnostic.
  */
 async function centreBrightness(page) {
   return page.evaluate(() => {
-    const canvas = document.querySelector('.game-canvas');
-    const ctx = canvas.getContext('2d');
+    const canvas =
+      document.querySelector('.game-canvas:not(.overlay)') ??
+      document.querySelector('.game-canvas');
+    const scratch = document.createElement('canvas');
+    scratch.width = canvas.width;
+    scratch.height = canvas.height;
+    const ctx = scratch.getContext('2d');
+    ctx.drawImage(canvas, 0, 0);
     const w = Math.floor(canvas.width * 0.4);
     const h = Math.floor(canvas.height * 0.4);
     const data = ctx.getImageData(

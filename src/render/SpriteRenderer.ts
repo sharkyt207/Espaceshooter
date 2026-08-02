@@ -1,6 +1,7 @@
 import type { Camera } from './Raycaster';
 import type { SpriteFrame } from './Sprites';
 import type { TileMap } from '../world/TileMap';
+import type { SpriteSink } from './SpriteSink';
 
 /**
  * SpriteRenderer - depth-tested billboard compositing.
@@ -37,7 +38,7 @@ export interface SpriteDraw {
 
 const MAX_SPRITES = 512;
 
-export class SpriteRenderer {
+export class SpriteRenderer implements SpriteSink {
   private draws: SpriteDraw[] = [];
   private count = 0;
   private order: Int32Array = new Int32Array(MAX_SPRITES);
