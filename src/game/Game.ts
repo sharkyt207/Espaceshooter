@@ -157,6 +157,7 @@ export class Game {
       onApply: (settings) => this.applySettings(settings),
       onResetProfile: () => this.resetProfile(),
       onShowPrimer: () => this.screens.push('primer'),
+      rendererName: () => this.renderer.rendererName,
     });
 
     this.pauseScreen = new PauseScreen({
@@ -274,6 +275,7 @@ export class Game {
     this.input.invertY = settings.invertY;
     this.renderer.fixedScale = settings.renderScale;
     this.renderer.applyPostQuality(settings.postQuality);
+    this.renderer.setRendererMode(settings.renderer);
     this.hud.setDebugVisible(settings.showFps);
     setHapticsEnabled(settings.haptics);
     this.renderer.resize();

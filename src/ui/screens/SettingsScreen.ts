@@ -23,6 +23,8 @@ export class SettingsScreen implements Screen {
       onApply: (settings: GameSettings) => void;
       onResetProfile: () => void;
       onShowPrimer: () => void;
+      /** What is drawing the raid right now, for the renderer hint. */
+      rendererName: () => string;
     },
   ) {
     const shell = screenShell('Einstellungen', 'Steuerung, Darstellung und Ton', () => actions.onClose());
@@ -79,6 +81,25 @@ export class SettingsScreen implements Screen {
         (value) => {
           this.settings.postQuality = value;
           this.apply();
+        },
+      ),
+    );
+    content.appendChild(
+      this.choiceRow(
+        'Renderer',
+        `Automatik nutzt die Grafikeinheit, wo sie funktioniert. Aktiv: ${this.actions.rendererName()}.`,
+        [
+          { label: 'Automatik', value: -1 },
+          { label: 'Grafikeinheit', value: 1 },
+          { label: 'Software', value: 0 },
+        ],
+        this.settings.renderer,
+        (value) => {
+          this.settings.renderer = value;
+          this.apply();
+          // The hint line names the renderer that is actually running, and
+          // that answer changes the moment this is applied.
+          this.render();
         },
       ),
     );

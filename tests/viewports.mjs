@@ -163,6 +163,20 @@ for (const device of DEVICES) {
     await audit(file);
   }
 
+  // This suite is about layout - safe areas, notches, whether anything
+  // overlaps at 3x - and layout is the same whichever backend draws the world
+  // behind it. It is also the one suite that has to run at real device pixel
+  // ratios, which is exactly where WebGL on SwiftShader falls over: a 932x430
+  // viewport at 3x is nearly four megapixels through a CPU rasteriser, and the
+  // raid screenshots time out.
+  //
+  // So the raid is drawn by the software path here. The GPU path is covered by
+  // smoke.mjs and renderers.mjs; nothing this file asserts can tell them apart.
+  await page.evaluate(() => {
+    window.game.settings.renderer = 0;
+    window.game.applySettings(window.game.settings);
+  });
+
   await page.getByRole('button', { name: 'Einsatz starten' }).click();
   await page.waitForTimeout(400);
   await shot('deploy');

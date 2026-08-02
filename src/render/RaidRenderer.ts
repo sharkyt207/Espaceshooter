@@ -118,6 +118,9 @@ export class RaidRenderer {
   private rain = new Float32Array(0);
   private rainDrops = 0;
 
+  /** Set false to force the software path even where GL works. */
+  private glAllowed = true;
+
   constructor(container: HTMLElement, preferGL = true) {
     // The world canvas goes in first so the overlay canvas paints above it.
     // Under GL the world is drawn here and the 2D canvas carries only the
@@ -162,11 +165,47 @@ export class RaidRenderer {
 
   /** True when the hardware path is active. */
   get usingGL(): boolean {
-    return this.gl !== null && !this.gl.failed;
+    return this.gl !== null && !this.gl.failed && this.glAllowed;
   }
 
   get rendererName(): string {
-    return this.gl && !this.gl.failed ? this.gl.rendererName : 'Software';
+    return this.usingGL ? this.gl!.rendererName : 'Software';
+  }
+
+  /**
+   * The canvas the world is actually drawn on.
+   *
+   * Under GL that is the backing canvas; the 2D one in front holds only the
+   * viewmodel and the HUD over a transparent background. Without GL the 2D
+   * canvas holds everything. Anything that wants to read the rendered world -
+   * the test harnesses do - has to ask rather than guess from the DOM, because
+   * a forced-software run still has a GL canvas sitting there, hidden and
+   * holding a stale frame.
+   */
+  get worldCanvas(): HTMLCanvasElement {
+    return this.usingGL && this.glCanvas ? this.glCanvas : this.canvas;
+  }
+
+  /**
+   * Choose a renderer: -1 automatic, 1 force GPU, 0 force software.
+   *
+   * The GL context is kept alive either way rather than torn down and rebuilt.
+   * Recreating it means re-uploading the texture array, the sprite sheet and
+   * the world mesh, which is a visible stall, and context creation is the part
+   * most likely to fail on the hardware where someone would be reaching for
+   * this switch in the first place. Toggling a flag cannot fail.
+   *
+   * Forcing the GPU path cannot conjure one: if the context never came up,
+   * this stays on software.
+   */
+  setRendererMode(mode: number): void {
+    const allowed = mode !== 0;
+    if (allowed === this.glAllowed) return;
+    this.glAllowed = allowed;
+    if (this.glCanvas) this.glCanvas.style.display = allowed ? '' : 'none';
+    // The software path has to repaint the full frame from scratch now, and
+    // the raycaster's buffers were sized for whichever path was last active.
+    this.resize();
   }
 
   /** Every baked frame, for the GPU sprite sheet. */
@@ -275,7 +314,7 @@ export class RaidRenderer {
     const cam = this.camera;
     const flash = session.effects.flash + this.lightningFlash;
 
-    if (this.gl && !this.gl.failed) {
+    if (this.usingGL) {
       this.renderGL(session, flash);
       this.drawPrecipitation(session);
       this.drawViewmodel(session);

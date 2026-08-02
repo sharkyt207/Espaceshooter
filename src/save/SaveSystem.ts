@@ -51,6 +51,20 @@ export interface GameSettings {
   primerSeen: boolean;
   /** 0 = off, 1 = tone mapping, 2 = bloom and tone mapping. -1 = by device. */
   postQuality: number;
+  /**
+   * Which renderer draws the raid.
+   *
+   * -1 picks the GPU where WebGL2 works and falls back silently otherwise,
+   * which is what almost everyone should be on. 1 and 0 force the GPU and
+   * software paths respectively - kept as an escape hatch because a driver
+   * that reports WebGL2 and then renders garbage is a real thing on cheap
+   * Android hardware, and a player who hits that needs a way out that does not
+   * involve reinstalling.
+   *
+   * Takes effect at the next raid: swapping canvases mid-frame is not worth
+   * the failure modes.
+   */
+  renderer: number;
 }
 
 export function defaultSettings(): GameSettings {
@@ -65,6 +79,7 @@ export function defaultSettings(): GameSettings {
     haptics: true,
     primerSeen: false,
     postQuality: -1,
+    renderer: -1,
   };
 }
 

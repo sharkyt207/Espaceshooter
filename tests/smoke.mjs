@@ -296,11 +296,12 @@ function assert(condition, message) {
 /**
  * Mean luminance of the middle of the rendered frame.
  *
- * Which canvas holds the world depends on the active renderer. The software
- * path draws it straight onto `.game-canvas`; the GPU path renders into its
- * own canvas and puts a transparent 2D overlay in front for the HUD, which is
- * the one marked `.overlay`. Measuring the overlay would read a fully
- * transparent image and every luminance assertion would compare zero to zero.
+ * Which canvas holds the world depends on the active renderer: the software
+ * path draws it straight onto the 2D canvas, while the GPU path renders into
+ * its own and puts a transparent overlay in front for the HUD. Measuring the
+ * overlay would read a fully transparent image and every luminance assertion
+ * would compare zero to zero, so the renderer is asked rather than the DOM
+ * queried.
  *
  * A WebGL canvas has no 2D context to read from either, so the pixels come
  * back through `drawImage` into a scratch canvas - which works for both
@@ -308,9 +309,7 @@ function assert(condition, message) {
  */
 async function centreBrightness(page) {
   return page.evaluate(() => {
-    const canvas =
-      document.querySelector('.game-canvas:not(.overlay)') ??
-      document.querySelector('.game-canvas');
+    const canvas = window.game.renderer.worldCanvas;
     const scratch = document.createElement('canvas');
     scratch.width = canvas.width;
     scratch.height = canvas.height;
