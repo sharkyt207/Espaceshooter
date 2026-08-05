@@ -423,6 +423,16 @@ uniform float uTime;
 /** Screen tint and strength: red for damage, dark for exhaustion. */
 uniform vec4 uOverlay;
 
+// --- style grade ---------------------------------------------------------
+uniform vec3 uShadowTint;
+uniform float uShadowAmount;
+uniform vec3 uHighlightTint;
+uniform float uHighlightAmount;
+uniform float uSaturation;
+uniform float uContrast;
+uniform float uAberration;
+uniform float uScanlines;
+
 out vec4 fragColor;
 
 float hash21(vec2 p) {
@@ -449,23 +459,63 @@ vec3 tonemap(vec3 x) {
 }
 
 void main() {
-  vec3 scene = texture(uScene, vUv).rgb;
+  vec2 centred = vUv - 0.5;
+
+  // --- chromatic aberration ----------------------------------------------
+  //
+  // A lens cannot bring every wavelength to focus at the same point, and the
+  // error grows with distance from the axis - so this scales with the radius
+  // and is nothing at all in the middle, where the player is aiming.
+  //
+  // The scene is sampled three times when it is enabled and once when it is
+  // not. The branch is uniform across the draw, so it costs nothing on any
+  // GPU that matters.
+  vec3 scene;
+  if (uAberration > 0.0) {
+    float r2 = dot(centred, centred);
+    vec2 offset = centred * r2 * uAberration * 0.06;
+    scene = vec3(
+      texture(uScene, vUv + offset).r,
+      texture(uScene, vUv).g,
+      texture(uScene, vUv - offset).b
+    );
+  } else {
+    scene = texture(uScene, vUv).rgb;
+  }
+
   vec3 bloom = texture(uBloom, vUv).rgb;
   vec3 color = scene + bloom * uBloomStrength;
 
   color = tonemap(color * uExposure);
 
-  // Grade: lift the shadows slightly towards blue and pull the highlights
-  // towards warm. A neutral image reads as untreated footage; this is the
-  // cheapest thing that makes it look shot rather than rendered.
+  // --- grade ---------------------------------------------------------------
+  //
+  // Split-toning: the shadows and the highlights are pulled towards different
+  // colours. This is the single cheapest thing that makes an image look shot
+  // rather than rendered, because no real film or sensor is neutral at both
+  // ends. Which way each end goes is what most distinguishes the three styles.
   float lum = dot(color, vec3(0.299, 0.587, 0.114));
-  color = mix(color, color * vec3(0.94, 0.98, 1.10), (1.0 - lum) * 0.35);
-  color = mix(color, color * vec3(1.06, 1.01, 0.92), lum * 0.30);
+  color = mix(color, color * uShadowTint, (1.0 - lum) * uShadowAmount);
+  color = mix(color, color * uHighlightTint, lum * uHighlightAmount);
+
+  // Saturation, against the luminance the eye actually weights.
+  color = mix(vec3(dot(color, vec3(0.299, 0.587, 0.114))), color, uSaturation);
+
+  // Contrast, pivoted on mid grey so it shapes the image without changing how
+  // bright it is overall.
+  color = (color - 0.5) * uContrast + 0.5;
 
   // Vignette.
-  vec2 centred = vUv - 0.5;
   float vig = 1.0 - dot(centred, centred) * uVignette;
   color *= clamp(vig, 0.0, 1.0);
+
+  // Scanlines. Tied to the fragment rather than to the texture coordinate so
+  // the pattern stays fixed to the screen, which is what a display artefact
+  // does - one locked to the world would swim as the player turns.
+  if (uScanlines > 0.0) {
+    float line = sin(gl_FragCoord.y * 3.14159) * 0.5 + 0.5;
+    color *= 1.0 - line * uScanlines;
+  }
 
   // Grain, strongest in the mid-tones where a sensor is actually noisiest.
   float grain = (hash21(vUv * 1024.0 + uTime) - 0.5);
@@ -474,6 +524,6 @@ void main() {
   // Full-screen state overlays - damage red, exhaustion dark.
   color = mix(color, uOverlay.rgb, uOverlay.a);
 
-  fragColor = vec4(color, 1.0);
+  fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 `;

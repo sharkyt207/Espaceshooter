@@ -1,4 +1,4 @@
-import { el } from '../Dom';
+import { cssVar, el } from '../Dom';
 import { screenShell, type Screen } from '../ScreenManager';
 import type { RaidSession } from '../../raid/RaidSession';
 import { TILE_DEFS } from '../../world/TileMap';
@@ -114,7 +114,7 @@ export class MapScreen implements Screen {
     this.canvas.style.height = `${(display * h) / w}px`;
 
     const ctx = this.ctx;
-    ctx.fillStyle = '#080a0c';
+    ctx.fillStyle = cssVar('--bg-0');
     ctx.fillRect(0, 0, w, h);
 
     // --- terrain -----------------------------------------------------------
@@ -126,11 +126,11 @@ export class MapScreen implements Screen {
         const def = TILE_DEFS[tile];
         let color: string;
         if (def.wall) {
-          color = def.opaque ? '#4a5058' : '#39424c';
+          color = def.opaque ? cssVar('--line-bright') : cssVar('--line');
         } else if (map.isIndoors(x, y)) {
-          color = '#20262d';
+          color = cssVar('--bg-3');
         } else {
-          color = '#171b20';
+          color = cssVar('--bg-2');
         }
         ctx.fillStyle = color;
         ctx.fillRect(x * scale, y * scale, scale, scale);
@@ -140,20 +140,20 @@ export class MapScreen implements Screen {
     // --- extraction markers -------------------------------------------------
     for (const ex of session.extraction.extracts) {
       if (!ex.discovered) continue;
-      ctx.fillStyle = ex.available ? '#6fe0a0' : '#4f6a8a';
+      ctx.fillStyle = ex.available ? cssVar('--good') : cssVar('--info');
       const px = ex.def.x * scale;
       const py = ex.def.y * scale;
       ctx.beginPath();
       ctx.arc(px, py, Math.max(3, scale * 1.2), 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#d6dce4';
+      ctx.fillStyle = cssVar('--text');
       ctx.font = `${Math.max(9, scale * 2)}px sans-serif`;
       ctx.fillText(ex.def.name, px + scale * 2, py + scale);
     }
 
     // --- active event markers -----------------------------------------------
     for (const marker of session.events.markers()) {
-      ctx.fillStyle = '#c8913a';
+      ctx.fillStyle = cssVar('--accent');
       ctx.beginPath();
       ctx.arc(marker.x * scale, marker.y * scale, Math.max(3, scale), 0, Math.PI * 2);
       ctx.fill();
@@ -174,7 +174,7 @@ export class MapScreen implements Screen {
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(session.player.angle);
-    ctx.fillStyle = '#c8913a';
+    ctx.fillStyle = cssVar('--accent');
     ctx.beginPath();
     ctx.moveTo(scale * 2.2, 0);
     ctx.lineTo(-scale * 1.2, -scale * 1.3);

@@ -11,6 +11,7 @@ import {
 } from './Shaders';
 import { buildWorldMesh, FLOATS_PER_VERTEX } from './WorldMesh';
 import { SpriteAtlas } from './SpriteAtlas';
+import { DEFAULT_STYLE, STYLES, type GradeSpec } from '../Style';
 
 /**
  * GLWorldRenderer - the hardware path.
@@ -142,6 +143,12 @@ export class GLWorldRenderer {
   grain = 0.045;
   vignette = 0.55;
 
+  /**
+   * The active style's grade. Replaced wholesale when the style changes; the
+   * composite reads it straight, so there is nothing to keep in sync.
+   */
+  grade: GradeSpec = STYLES[DEFAULT_STYLE].grade;
+
   private constructor(setup: GLSetup) {
     this.setup = setup;
     this.gl = setup.gl;
@@ -181,6 +188,8 @@ export class GLWorldRenderer {
     const composite = createProgram(gl, FULLSCREEN_VS, COMPOSITE_FS, [
       'uScene', 'uBloom', 'uBloomStrength', 'uExposure', 'uGrain',
       'uVignette', 'uTime', 'uOverlay',
+      'uShadowTint', 'uShadowAmount', 'uHighlightTint', 'uHighlightAmount',
+      'uSaturation', 'uContrast', 'uAberration', 'uScanlines',
     ], 'composite');
 
     if (!world || !sky || !sprite || !bright || !blur || !composite) return false;
@@ -775,6 +784,15 @@ export class GLWorldRenderer {
     gl.uniform1f(c.u.uVignette, this.vignette);
     gl.uniform1f(c.u.uTime, params.time);
     gl.uniform4f(c.u.uOverlay, params.overlay[0], params.overlay[1], params.overlay[2], params.overlay[3]);
+    const g = this.grade;
+    gl.uniform3f(c.u.uShadowTint, g.shadowTint[0], g.shadowTint[1], g.shadowTint[2]);
+    gl.uniform1f(c.u.uShadowAmount, g.shadowAmount);
+    gl.uniform3f(c.u.uHighlightTint, g.highlightTint[0], g.highlightTint[1], g.highlightTint[2]);
+    gl.uniform1f(c.u.uHighlightAmount, g.highlightAmount);
+    gl.uniform1f(c.u.uSaturation, g.saturation);
+    gl.uniform1f(c.u.uContrast, g.contrast);
+    gl.uniform1f(c.u.uAberration, g.aberration);
+    gl.uniform1f(c.u.uScanlines, g.scanlines);
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);

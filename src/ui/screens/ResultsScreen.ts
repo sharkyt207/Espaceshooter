@@ -82,16 +82,16 @@ export class ResultsScreen implements Screen {
       }, [
         tile('Dauer', duration(result.durationSec)),
         tile('Ausschaltungen', String(result.kills)),
-        tile('Erfahrung', `+${result.xpEarned}`, '#c8913a'),
+        tile('Erfahrung', `+${result.xpEarned}`, 'var(--accent)'),
         tile(
           result.survived ? 'Herausgebracht' : 'Gesichert',
           money(result.lootValue),
-          result.survived ? '#4f9e6a' : '#8b95a3',
+          result.survived ? 'var(--good)' : 'var(--text-dim)',
         ),
         tile('Eingesetzt', money(this.riskValue)),
         result.survived
-          ? tile('Netto', `${net >= 0 ? '+' : ''}${money(net)}`, net >= 0 ? '#4f9e6a' : '#b8453a')
-          : tile('Verloren', money(result.lostValue), '#b8453a'),
+          ? tile('Netto', `${net >= 0 ? '+' : ''}${money(net)}`, net >= 0 ? 'var(--good)' : 'var(--bad)')
+          : tile('Verloren', money(result.lostValue), 'var(--bad)'),
       ]),
     );
 
@@ -111,7 +111,7 @@ export class ResultsScreen implements Screen {
           text: result.conditionBonus > 1.01
             ? `${result.conditions}  ·  +${Math.round((result.conditionBonus - 1) * 100)} %`
             : result.conditions,
-          style: result.conditionBonus > 1.01 ? { color: '#c8913a' } : {},
+          style: result.conditionBonus > 1.01 ? { color: 'var(--accent)' } : {},
         }),
       ]),
     );
@@ -161,7 +161,7 @@ export class ResultsScreen implements Screen {
       detailBody.appendChild(
         el('div', {
           class: 'sub',
-          style: { marginTop: '14px', color: '#8b95a3', lineHeight: '1.55' },
+          style: { marginTop: '14px', color: 'var(--text-dim)', lineHeight: '1.55' },
           text:
             covered > 0
               ? `${covered} versicherte Gegenstände sind auf dem Rückweg. Sie treffen im Versteck ein, ` +
@@ -173,7 +173,7 @@ export class ResultsScreen implements Screen {
       detailBody.appendChild(
         el('div', {
           class: 'sub',
-          style: { marginTop: '14px', color: '#8b95a3', lineHeight: '1.55' },
+          style: { marginTop: '14px', color: 'var(--text-dim)', lineHeight: '1.55' },
           text:
             'Beute liegt in deiner Ausrüstung. Im Versteck kannst du sie ins Lager übernehmen, ' +
             'verkaufen oder für Ausbau und Fertigung verwenden.',

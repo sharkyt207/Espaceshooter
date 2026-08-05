@@ -34,12 +34,24 @@ export type Rarity = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
 /** Ordered so comparisons and colour ramps can index it. */
 export const RARITY_ORDER: readonly Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
 
+/**
+ * Item tier colour, as a CSS custom property reference.
+ *
+ * A reference rather than a literal because the tiers have to belong to
+ * whichever style is active: five fixed colours that look right against a cool
+ * grey interface look like a mistake against a warm monochrome one. Each style
+ * declares its own five, and every one of them keeps the tiers countable at a
+ * glance - that is information, not decoration, and it is not the style's to
+ * throw away.
+ *
+ * Canvas code cannot use these directly; it goes through `cssVar`.
+ */
 export const RARITY_COLOR: Record<Rarity, string> = {
-  common: '#8d9299',
-  uncommon: '#5fa86b',
-  rare: '#4f86c6',
-  epic: '#9a6cc9',
-  legendary: '#c98a3c',
+  common: 'var(--rarity-common)',
+  uncommon: 'var(--rarity-uncommon)',
+  rare: 'var(--rarity-rare)',
+  epic: 'var(--rarity-epic)',
+  legendary: 'var(--rarity-legendary)',
 };
 
 export const RARITY_LABEL: Record<Rarity, string> = {

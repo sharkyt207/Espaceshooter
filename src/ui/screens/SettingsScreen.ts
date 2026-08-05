@@ -2,6 +2,7 @@ import { button, clear, el } from '../Dom';
 import { screenShell, type Screen } from '../ScreenManager';
 import type { GameSettings } from '../../save/SaveSystem';
 import { haptic, hapticsSupported } from '../../platform/Platform';
+import { STYLE_ORDER, STYLES } from '../../render/Style';
 
 /**
  * SettingsScreen - performance, controls and audio.
@@ -50,6 +51,22 @@ export class SettingsScreen implements Screen {
     panel.append(el('div', { class: 'panel-head' }, [el('span', { text: 'Optionen' })]), content);
 
     content.appendChild(this.section('Darstellung'));
+    content.appendChild(
+      this.choiceRow(
+        'Stil',
+        STYLES[this.settings.style]?.tagline ?? '',
+        STYLE_ORDER.map((id) => ({ label: STYLES[id].name, value: id })),
+        this.settings.style,
+        (value) => {
+          this.settings.style = value;
+          this.apply();
+          // The whole screen is drawn in the style being chosen, so it has to
+          // be rebuilt to show the choice - which is also the fastest way to
+          // judge one.
+          this.render();
+        },
+      ),
+    );
     content.appendChild(
       this.choiceRow(
         'Auflösungsskalierung',
@@ -228,7 +245,7 @@ export class SettingsScreen implements Screen {
   private section(title: string): HTMLElement {
     return el('div', {
       class: 'panel-head',
-      style: { border: 'none', padding: '12px 0 4px', color: '#c8913a' },
+      style: { border: 'none', padding: '12px 0 4px', color: 'var(--accent)' },
       text: title,
     });
   }
@@ -275,7 +292,7 @@ export class SettingsScreen implements Screen {
       max: String(max),
       step: '0.05',
       value: String(value),
-      style: { flex: '1', accentColor: '#c8913a' },
+      style: { flex: '1', accentColor: 'var(--accent)' },
     });
     // `input` fires continuously while dragging, which is what we want for a
     // sensitivity slider the player is tuning by feel.

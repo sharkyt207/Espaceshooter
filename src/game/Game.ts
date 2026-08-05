@@ -7,6 +7,7 @@ import { SaveSystem, type GameSettings } from '../save/SaveSystem';
 import { Profile, loadoutRiskValue } from '../meta/Profile';
 import { RaidSession } from '../raid/RaidSession';
 import { RaidRenderer } from '../render/RaidRenderer';
+import { applyStyleToDocument, styleById } from '../render/Style';
 import { HUD } from '../ui/HUD';
 import { ScreenManager } from '../ui/ScreenManager';
 import { MainMenu } from '../ui/screens/MainMenu';
@@ -276,6 +277,14 @@ export class Game {
     this.renderer.fixedScale = settings.renderScale;
     this.renderer.applyPostQuality(settings.postQuality);
     this.renderer.setRendererMode(settings.renderer);
+
+    // The style reaches the DOM and the renderer separately, because they are
+    // separate surfaces: the menus are CSS, the raid is pixels. Both read the
+    // same definition, which is what keeps a hub and the raid it launches
+    // looking like the same game.
+    const style = styleById(settings.style);
+    applyStyleToDocument(style);
+    this.renderer.setStyle(style);
     this.hud.setDebugVisible(settings.showFps);
     setHapticsEnabled(settings.haptics);
     this.renderer.resize();

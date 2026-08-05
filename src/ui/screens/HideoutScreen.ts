@@ -7,6 +7,7 @@ import { EQUIP_SLOTS, EQUIP_SLOT_LABEL } from '../../inventory/Inventory';
 import { ItemDB } from '../../data/ItemDatabase';
 import type { EquipSlot } from '../../data/ItemTypes';
 import { RARITY_COLOR } from '../../data/ItemTypes';
+import { activeStyle, unifyColor } from '../../render/Style';
 import { createStack, defOf, stackValue, type ItemStack } from '../../inventory/ItemStack';
 import { HIDEOUT_MODULES, type ModuleId } from '../../meta/Hideout';
 import { RECIPES } from '../../meta/Crafting';
@@ -302,7 +303,7 @@ export class HideoutScreen implements Screen {
           el('span', { class: 'grow' }),
           el('span', { class: 'xp', text: `${Math.round(p.progression.levelProgress * 100)} % zur nächsten` }),
         ]),
-        bar(p.progression.levelProgress, '#c8913a'),
+        bar(p.progression.levelProgress, 'var(--accent)'),
         el('div', { class: 'row stats' }, [
           el('span', { text: `${p.raids} Einsätze` }),
           el('span', { text: `${p.survived} überlebt` }),
@@ -349,7 +350,7 @@ export class HideoutScreen implements Screen {
               el('span', { class: 'clock', text: item.done ? 'Fertig' : duration(item.remaining) }),
             ]),
             el('div', { class: 'sub', text: item.detail }),
-            bar(item.progress, item.done ? '#4f9e6a' : '#4f7d9e'),
+            bar(item.progress, item.done ? 'var(--good)' : 'var(--info)'),
           ]),
         );
       }
@@ -521,7 +522,7 @@ export class HideoutScreen implements Screen {
           el('div', {
             class: 'title',
             text: stack ? defOf(stack).name : '— leer —',
-            style: { color: stack ? RARITY_COLOR[defOf(stack).rarity] : '#5b6472' },
+            style: { color: stack ? RARITY_COLOR[defOf(stack).rarity] : 'var(--text-faint)' },
           }),
         ]),
         stack ? el('div', { class: 'price', text: money(stackValue(stack)) }) : null,
@@ -861,11 +862,11 @@ export class HideoutScreen implements Screen {
 
       if (state.buildRemaining > 0) {
         rows.push(
-          el('div', { class: 'sub', style: { color: '#c8913a' }, text: `Ausbau läuft: noch ${duration(state.buildRemaining)}` }),
-          bar(1 - state.buildRemaining / Math.max(1, def.levels[state.buildingLevel - 1]?.buildSeconds ?? 1), '#c8913a'),
+          el('div', { class: 'sub', style: { color: 'var(--accent)' }, text: `Ausbau läuft: noch ${duration(state.buildRemaining)}` }),
+          bar(1 - state.buildRemaining / Math.max(1, def.levels[state.buildingLevel - 1]?.buildSeconds ?? 1), 'var(--accent)'),
         );
       } else if (next) {
-        rows.push(el('div', { class: 'sub', style: { color: '#8b95a3' }, text: next.effect }));
+        rows.push(el('div', { class: 'sub', style: { color: 'var(--text-dim)' }, text: next.effect }));
         const costText = next.cost
           .map((c) => {
             const have = this.profile.stash.countOf(c.defId);
@@ -876,7 +877,7 @@ export class HideoutScreen implements Screen {
           el('div', { class: 'sub', text: `${money(next.money)}  ·  ${costText}  ·  ${duration(next.buildSeconds)}` }),
         );
       } else {
-        rows.push(el('div', { class: 'sub', style: { color: '#4f9e6a' }, text: 'Vollständig ausgebaut' }));
+        rows.push(el('div', { class: 'sub', style: { color: 'var(--good)' }, text: 'Vollständig ausgebaut' }));
       }
 
       const row = el('div', { class: 'list-row' }, [
@@ -911,7 +912,7 @@ export class HideoutScreen implements Screen {
           el('span', { class: 'label', text: 'Stufe' }),
           el('span', { class: 'value', text: String(p.level) }),
         ]),
-        bar(p.levelProgress, '#c8913a', `${Math.round(p.levelProgress * 100)} % zur nächsten Stufe`),
+        bar(p.levelProgress, 'var(--accent)', `${Math.round(p.levelProgress * 100)} % zur nächsten Stufe`),
       ]),
     );
     for (const id of Object.keys(SKILLS) as SkillId[]) {
@@ -923,8 +924,8 @@ export class HideoutScreen implements Screen {
             el('span', { class: 'label', text: skill.name }),
             el('span', { class: 'value', text: `${state.level} / ${MAX_SKILL_LEVEL}` }),
           ]),
-          bar(state.level / MAX_SKILL_LEVEL, '#4f7d9e'),
-          el('div', { class: 'sub', style: { fontSize: '11px', color: '#5b6472' }, text: skill.description }),
+          bar(state.level / MAX_SKILL_LEVEL, 'var(--info)'),
+          el('div', { class: 'sub', style: { fontSize: '11px', color: 'var(--text-faint)' }, text: skill.description }),
         ]),
       );
     }
@@ -943,7 +944,7 @@ export class HideoutScreen implements Screen {
           list,
           el('div', {
             class: 'panel-head',
-            style: { border: 'none', padding: '14px 0 4px', color: '#c8913a' },
+            style: { border: 'none', padding: '14px 0 4px', color: 'var(--accent)' },
             text: 'Operator',
           }),
           skills,
@@ -1008,7 +1009,7 @@ export class HideoutScreen implements Screen {
           el('div', { class: 'grow' }, [
             el('div', { class: 'title', text: recipe?.name ?? job.recipeId }),
             el('div', { class: 'sub', text: `noch ${duration(job.secondsRemaining)}` }),
-            bar(1 - job.secondsRemaining / job.totalSeconds, '#4f9e6a'),
+            bar(1 - job.secondsRemaining / job.totalSeconds, 'var(--good)'),
           ]),
           button('Abbrechen', () => {
             this.profile.crafting.cancel(job.module);
@@ -1090,12 +1091,12 @@ export class HideoutScreen implements Screen {
       const row = el('div', { class: `list-row clickable trader-row${id === this.selectedTrader ? ' selected' : ''}` }, [
         face ? el('div', { class: 'trader-face' }, [face]) : null,
         el('div', { class: 'grow' }, [
-          el('div', { class: 'title', text: def.name, style: { color: def.color } }),
+          el('div', { class: 'title', text: def.name, style: { color: unifyColor(def.color, activeStyle()) } }),
           el('div', { class: 'sub', text: def.role }),
           el('div', { class: 'sub', text: `Rang ${tier + 1} · Ruf ${state.reputation}` }),
         ]),
       ].filter(Boolean) as HTMLElement[]);
-      row.style.borderColor = id === this.selectedTrader ? def.color : '';
+      row.style.borderColor = id === this.selectedTrader ? unifyColor(def.color, activeStyle()) : '';
       row.addEventListener('click', () => {
         this.selectedTrader = id;
         this.renderContent();
@@ -1112,9 +1113,9 @@ export class HideoutScreen implements Screen {
     const bigFace = portraitNode(this.selectedTrader, 0.42);
     stock.appendChild(
       el('div', { class: 'trader-header' }, [
-        bigFace ? el('div', { class: 'face', style: { borderColor: def.color } }, [bigFace]) : null,
+        bigFace ? el('div', { class: 'face', style: { borderColor: unifyColor(def.color, activeStyle()) } }, [bigFace]) : null,
         el('div', { class: 'grow' }, [
-          el('div', { class: 'name', text: def.name, style: { color: def.color } }),
+          el('div', { class: 'name', text: def.name, style: { color: unifyColor(def.color, activeStyle()) } }),
           el('div', { class: 'role', text: def.role }),
           el('div', { class: 'quote', text: `"${def.greeting}"` }),
         ]),
@@ -1232,39 +1233,39 @@ export class HideoutScreen implements Screen {
         el('div', { class: 'title', text: quest.title }),
         // Whose job this is matters more than what level it needs, so the
         // person is named in their own colour with their face beside it.
-        el('div', { class: 'sub', text: `${trader.name} · Stufe ${quest.requiredLevel}`, style: { color: trader.color } }),
+        el('div', { class: 'sub', text: `${trader.name} · Stufe ${quest.requiredLevel}`, style: { color: unifyColor(trader.color, activeStyle()) } }),
       ];
 
       if (state.status === 'active') {
-        rows.push(el('div', { class: 'sub', style: { color: '#8b95a3', marginTop: '4px' }, text: quest.brief }));
+        rows.push(el('div', { class: 'sub', style: { color: 'var(--text-dim)', marginTop: '4px' }, text: quest.brief }));
         for (const objective of quest.objectives) {
           const progress = state.progress[objective.id] ?? 0;
           const done = progress >= objective.target;
           rows.push(
             el('div', {
               class: 'sub',
-              style: { color: done ? '#4f9e6a' : '#d6dce4' },
+              style: { color: done ? 'var(--good)' : 'var(--text)' },
               text: `${done ? '✓' : '•'} ${objective.description}: ${progress} / ${objective.target}`,
             }),
           );
         }
       } else if (state.status === 'complete') {
-        rows.push(el('div', { class: 'sub', style: { color: '#4f9e6a' }, text: 'Abgeschlossen' }));
+        rows.push(el('div', { class: 'sub', style: { color: 'var(--good)' }, text: 'Abgeschlossen' }));
       } else if (state.status === 'available') {
-        rows.push(el('div', { class: 'sub', style: { color: '#8b95a3', marginTop: '4px' }, text: quest.brief }));
+        rows.push(el('div', { class: 'sub', style: { color: 'var(--text-dim)', marginTop: '4px' }, text: quest.brief }));
       } else {
         const missing = quest.requires.filter((r) => this.profile.quests.states.get(r)?.status !== 'complete');
         rows.push(
           el('div', {
             class: 'sub',
-            style: { color: '#5b6472' },
+            style: { color: 'var(--text-faint)' },
             text: missing.length > 0 ? 'Vorheriger Auftrag noch offen' : `Erfordert Stufe ${quest.requiredLevel}`,
           }),
         );
       }
 
       rows.push(
-        el('div', { class: 'sub', style: { color: '#c8913a', marginTop: '4px' } , text:
+        el('div', { class: 'sub', style: { color: 'var(--accent)', marginTop: '4px' } , text:
           `Belohnung: ${quest.rewards.xp} EP · ${money(quest.rewards.money)} · ${quest.rewards.reputation} Ruf` +
           (quest.rewards.items?.length ? ` · ${quest.rewards.items.map((i) => ItemDB.get(i.defId).shortName).join(', ')}` : ''),
         }),
@@ -1355,7 +1356,7 @@ export class HideoutScreen implements Screen {
     list.appendChild(
       el('div', {
         class: 'sub',
-        style: { marginBottom: '10px', color: '#8b95a3', lineHeight: '1.5' },
+        style: { marginBottom: '10px', color: 'var(--text-dim)', lineHeight: '1.5' },
         text:
           'Versicherte Ausrüstung kann nach einem gescheiterten Einsatz zurückkommen - nicht sofort und ' +
           'nicht garantiert. Je wertvoller der Gegenstand, desto geringer die Rückgabequote. ' +
@@ -1402,7 +1403,7 @@ export class HideoutScreen implements Screen {
             el('div', { class: 'sub', text: `Wert ${money(stackValue(stack))}` }),
           ]),
           insured
-            ? el('span', { class: 'tag', style: { borderColor: '#4f9e6a', color: '#4f9e6a' }, text: 'Versichert' })
+            ? el('span', { class: 'tag', style: { borderColor: 'var(--good)', color: 'var(--good)' }, text: 'Versichert' })
             : button(
                 `Versichern ${money(premium)}`,
                 () => {

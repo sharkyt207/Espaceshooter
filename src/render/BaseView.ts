@@ -1,3 +1,4 @@
+import { cssVar } from '../ui/Dom';
 import type { ModuleId } from '../meta/Hideout';
 
 /**
@@ -168,7 +169,7 @@ function drawCorridors(
   gapX: number,
   gapY: number,
 ): void {
-  ctx.fillStyle = '#171a20';
+  ctx.fillStyle = cssVar('--bg-2');
   // Horizontal links.
   for (let row = 0; row < ROWS; row++) {
     const y = padY + row * (cellH + gapY) + cellH * 0.62;
@@ -246,13 +247,13 @@ function drawRoom(
   ctx.restore();
 
   // --- frame ---------------------------------------------------------------
-  ctx.strokeStyle = selected ? '#c8913a' : built ? '#39414d' : '#23272f';
+  ctx.strokeStyle = selected ? cssVar('--accent') : built ? '#39414d' : '#23272f';
   ctx.lineWidth = selected ? 2 : 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 }
 
 function drawRubble(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
-  ctx.fillStyle = '#191c22';
+  ctx.fillStyle = cssVar('--bg-2');
   for (let i = 0; i < 9; i++) {
     const rx = x + ((i * 37) % 100) / 100 * w * 0.9 + w * 0.05;
     const rw = w * (0.04 + ((i * 13) % 7) / 100);
@@ -304,7 +305,7 @@ function drawScaffolding(
   const p = Math.max(0, Math.min(1, state.buildProgress));
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(x + w * 0.1, y + h * 0.9, w * 0.8, h * 0.05);
-  ctx.fillStyle = '#c8913a';
+  ctx.fillStyle = cssVar('--accent');
   ctx.fillRect(x + w * 0.1, y + h * 0.9, w * 0.8 * p, h * 0.05);
 }
 
@@ -337,7 +338,7 @@ function drawFurniture(
       ctx.fillStyle = steelLit;
       ctx.fillRect(x + w * 0.18, floor - h * 0.34, w * 0.44, h * 0.05);
       // Exhaust up through the ceiling.
-      ctx.fillStyle = '#2b3038';
+      ctx.fillStyle = cssVar('--bg-3');
       ctx.fillRect(x + w * 0.52, y, w * 0.07, floor - y - h * 0.30);
       // Flywheel.
       const cxw = x + w * 0.70;
@@ -394,7 +395,7 @@ function drawFurniture(
       ctx.fillRect(x + w * 0.14, floor - h * 0.15, w * 0.05, h * 0.15);
       ctx.fillRect(x + w * 0.81, floor - h * 0.15, w * 0.05, h * 0.15);
       // Pegboard.
-      ctx.fillStyle = '#262b33';
+      ctx.fillStyle = cssVar('--bg-3');
       ctx.fillRect(x + w * 0.16, y + h * 0.20, w * 0.68, h * 0.34);
       ctx.strokeStyle = steelLit;
       ctx.lineWidth = Math.max(1, w * 0.008);
@@ -414,11 +415,11 @@ function drawFurniture(
     }
     case 'medstation': {
       // Examination bed and a cabinet, plus a monitor at higher levels.
-      ctx.fillStyle = '#3f4a52';
+      ctx.fillStyle = cssVar('--line-bright');
       ctx.fillRect(x + w * 0.12, floor - h * 0.16, w * 0.5, h * 0.06);
-      ctx.fillStyle = '#cfd6dc';
+      ctx.fillStyle = cssVar('--text');
       ctx.fillRect(x + w * 0.12, floor - h * 0.19, w * 0.5, h * 0.03);
-      ctx.fillStyle = '#2e353d';
+      ctx.fillStyle = cssVar('--line');
       ctx.fillRect(x + w * 0.16, floor - h * 0.10, w * 0.03, h * 0.10);
       ctx.fillRect(x + w * 0.55, floor - h * 0.10, w * 0.03, h * 0.10);
       // Cabinet with a cross.
@@ -543,7 +544,7 @@ function drawLabel(
   // Level pips, bottom right.
   const pipR = Math.max(2, w * 0.012);
   for (let i = 0; i < state.maxLevel; i++) {
-    ctx.fillStyle = i < state.level ? '#c8913a' : 'rgba(255,255,255,0.14)';
+    ctx.fillStyle = i < state.level ? cssVar('--accent') : 'rgba(255,255,255,0.14)';
     ctx.beginPath();
     ctx.arc(x + w - pipR * 2.5 - i * pipR * 3.2, y + h - pipR * 3, pipR, 0, Math.PI * 2);
     ctx.fill();

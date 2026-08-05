@@ -298,7 +298,7 @@ export class HUD {
       const x = width * 0.5 + delta * pxPerRad;
       if (x < -20 || x > width + 20) continue;
       this.compassTicks.appendChild(
-        el('span', { class: 'marker', style: { left: `${x}px`, color: '#d6dce4' }, text: label }),
+        el('span', { class: 'marker', style: { left: `${x}px`, color: 'var(--text)' }, text: label }),
       );
     }
 
@@ -315,7 +315,7 @@ export class HUD {
       this.compassMarkers.appendChild(
         el('span', {
           class: 'marker',
-          style: { left: `${x}px`, color: ex.available ? '#6fe0a0' : '#5b6472', top: '9px' },
+          style: { left: `${x}px`, color: ex.available ? 'var(--good)' : 'var(--text-faint)', top: '9px' },
           text: '▲',
         }),
       );
@@ -328,7 +328,7 @@ export class HUD {
       const x = width * 0.5 + delta * pxPerRad;
       if (x < -20 || x > width + 20) continue;
       this.compassMarkers.appendChild(
-        el('span', { class: 'marker', style: { left: `${x}px`, color: '#c8913a', top: '9px' }, text: '◆' }),
+        el('span', { class: 'marker', style: { left: `${x}px`, color: 'var(--accent)', top: '9px' }, text: '◆' }),
       );
     }
   }
@@ -338,8 +338,8 @@ export class HUD {
     const health = player.health;
 
     const hpFraction = clamp01(health.totalHp / health.totalMaxHp);
-    this.replaceBar(this.healthBar, hpFraction, hpFraction > 0.6 ? '#4f9e6a' : hpFraction > 0.3 ? '#c8913a' : '#b8453a');
-    this.replaceBar(this.staminaBar, clamp01(player.stamina / 100), '#4f7d9e');
+    this.replaceBar(this.healthBar, hpFraction, hpFraction > 0.6 ? 'var(--good)' : hpFraction > 0.3 ? 'var(--accent)' : 'var(--bad)');
+    this.replaceBar(this.staminaBar, clamp01(player.stamina / 100), 'var(--info)');
     this.replaceBar(this.energyBar, clamp01(health.energy / 100), '#9e8a4f');
     this.replaceBar(this.hydrationBar, clamp01(health.hydration / 100), '#4f8a9e');
 
@@ -357,7 +357,7 @@ export class HUD {
 
     const carried = player.carriedWeight;
     this.weightEl.textContent = fmtWeight(carried);
-    this.weightEl.style.color = player.overloaded ? '#b8453a' : player.loadFactor > 0.6 ? '#c8913a' : '#d6dce4';
+    this.weightEl.style.color = player.overloaded ? 'var(--bad)' : player.loadFactor > 0.6 ? 'var(--accent)' : 'var(--text)';
 
     this.statusEl.textContent = health.statusSummary() ?? '';
   }
@@ -402,7 +402,7 @@ export class HUD {
     this.weaponNameEl.textContent = name;
 
     const durability = resolved.durability;
-    this.weaponNameEl.style.color = durability < 35 ? '#b8453a' : durability < 60 ? '#c8913a' : '#8b95a3';
+    this.weaponNameEl.style.color = durability < 35 ? 'var(--bad)' : durability < 60 ? 'var(--accent)' : 'var(--text-dim)';
 
     this.fireModeEl.textContent =
       `${FIRE_MODE_LABEL[controller.currentFireMode]}${resolved.suppressed ? ' · GEDÄMPFT' : ''}`;
@@ -441,7 +441,7 @@ export class HUD {
       clear(this.actionBar);
       // Progress is derived from the remaining time so it works for any action.
       const total = Math.max(0.001, player.busySeconds);
-      this.actionBar.appendChild(bar(1 - clamp01(player.busySeconds / (total + 0.0001)), '#c8913a'));
+      this.actionBar.appendChild(bar(1 - clamp01(player.busySeconds / (total + 0.0001)), 'var(--accent)'));
       this.promptEl.classList.add('hidden');
       return;
     }

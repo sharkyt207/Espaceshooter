@@ -61,7 +61,7 @@ export const TRADERS: Record<TraderId, TraderDef> = {
   zoellner: {
     id: 'zoellner',
     name: 'Der Zöllner',
-    role: 'Wertgegenstände',
+    role: 'Hehlerei',
     greeting: 'Alles hat einen Preis. Deiner ist wahrscheinlich niedriger, als du denkst.',
     buys: { valuable: 1.25, key: 1.1, quest: 0.5, material: 0.9, tool: 0.95 },
     sells: ['valuable', 'key', 'tool', 'material'],

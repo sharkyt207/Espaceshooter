@@ -8,6 +8,8 @@ import { SpriteRenderer } from './SpriteRenderer';
 import { SpriteLibrary, frameIndexFor, type CharacterSheet, type SpriteFrame } from './Sprites';
 import type { SpriteSink } from './SpriteSink';
 import { TextureAtlas } from './Textures';
+import { setPortraitStyle } from './Portraits';
+import { DEFAULT_STYLE, STYLES, type VisualStyle } from './Style';
 import { PerfGovernor } from '../core/Loop';
 import { PostProcess } from './PostProcess';
 import { detectDeviceTier, initialRenderScale } from '../platform/Platform';
@@ -84,10 +86,28 @@ export class RaidRenderer {
 
   /** `-1` means "decide from the device", otherwise 0, 1 or 2. */
   applyPostQuality(level: number): void {
-    const resolved = level >= 0 ? level : (detectDeviceTier() === 'low' ? 1 : 2);
-    this.postQuality = resolved;
-    this.post.settings.bloomStrength = resolved >= 2 ? 0.9 : 0;
-    this.post.settings.toneMapping = resolved >= 1 ? 1 : 0;
+    this.postQuality = level >= 0 ? level : (detectDeviceTier() === 'low' ? 1 : 2);
+    this.refreshPost();
+  }
+
+  /**
+   * Reconcile the style's grade with the quality level.
+   *
+   * Both have a say and they arrive independently - the style says how the
+   * game should look, the quality level says how much of that this device can
+   * afford - so they are combined in one place rather than each writing to the
+   * post settings and whichever ran last winning.
+   */
+  private refreshPost(): void {
+    const grade = this.style.grade;
+    this.post.settings.grade = grade;
+    this.post.settings.bloomStrength = this.postQuality >= 2 ? grade.bloomStrength : 0;
+    this.post.settings.toneMapping = this.postQuality >= 1 ? 1 : 0;
+    if (this.gl) {
+      this.gl.grade = grade;
+      this.gl.grain = grade.grain;
+      this.gl.bloomStrength = this.postQuality >= 2 ? grade.bloomStrength : 0;
+    }
   }
 
   private displayWidth = 0;
@@ -120,6 +140,22 @@ export class RaidRenderer {
 
   /** Set false to force the software path even where GL works. */
   private glAllowed = true;
+
+  /** The active visual direction. Drives the grade and the weapon finish. */
+  private style: VisualStyle = STYLES[DEFAULT_STYLE];
+
+  /**
+   * Switch the visual style.
+   *
+   * Everything downstream reads `this.style` per frame, so there is nothing to
+   * rebuild here except the software renderer's tone curves, which are keyed
+   * on the grade and notice by themselves.
+   */
+  setStyle(style: VisualStyle): void {
+    this.style = style;
+    this.refreshPost();
+    setPortraitStyle(style.portrait);
+  }
 
   constructor(container: HTMLElement, preferGL = true) {
     // The world canvas goes in first so the overlay canvas paints above it.
@@ -424,8 +460,10 @@ export class RaidRenderer {
       (1 - clamp01(health.totalHp / health.totalMaxHp)) * 0.9 + health.modifiers.painIntensity * 0.4,
     );
 
-    gl.bloomStrength = 0.7;
-    gl.vignette = 0.45 + painVignette * 0.9;
+    // The vignette is the one post value the game itself moves: it closes in
+    // as the player is hurt. So it is set per frame from the style's base
+    // rather than once when the style changes.
+    gl.vignette = this.style.grade.vignette + painVignette * 0.9;
     gl.render(session.map, {
       camX: cam.x,
       camY: cam.y,
@@ -744,6 +782,25 @@ export class RaidRenderer {
   }
 
   /** Simple but readable weapon silhouette, assembled from the fitted parts. */
+  /**
+   * The weapon in the player's hands.
+   *
+   * Rewritten from flat fills to shaded panels, which is most of the
+   * difference between a silhouette and a model. Three things do that work:
+   *
+   *   - **A vertical gradient on every panel.** A rectangle of one colour
+   *     reads as a cut-out no matter how good the outline is. A rectangle that
+   *     is lighter at the top reads as a rounded surface under a sky.
+   *   - **A rim light along the top edge**, which is what separates the weapon
+   *     from whatever is behind it. Without it the gun disappears into a dark
+   *     wall, which is exactly when the player most needs to see it.
+   *   - **A cast shadow under the receiver**, so the magazine and grip sit
+   *     beneath the body rather than beside it.
+   *
+   * All three come from the style's `WeaponSpec`, so a documentary finish, a
+   * high-contrast one and a warm graphic one are the same geometry lit
+   * differently rather than three separate drawings to keep in sync.
+   */
   private drawWeaponSilhouette(
     ctx: CanvasRenderingContext2D,
     caliber: string,
@@ -753,68 +810,108 @@ export class RaidRenderer {
   ): void {
     const long = widthCells >= 4;
     const bodyLength = long ? 170 : 100;
+    const w = this.style.weapon;
 
-    // Receiver
-    ctx.fillStyle = '#23252a';
-    ctx.strokeStyle = '#0e0f12';
-    ctx.lineWidth = 2;
-    roundRectPath(ctx, -bodyLength, -54, bodyLength, 34, 5);
-    ctx.fill();
-    ctx.stroke();
-
-    // Barrel
-    ctx.fillStyle = '#1a1c20';
-    ctx.fillRect(-bodyLength - (long ? 62 : 26), -46, long ? 62 : 26, 13);
-
-    if (suppressed) {
-      ctx.fillStyle = '#2c2f34';
-      roundRectPath(ctx, -bodyLength - (long ? 118 : 76), -52, 58, 24, 8);
+    /** A panel with a top-lit gradient, an outline, and an optional rim. */
+    const panel = (
+      x: number, y: number, width: number, height: number, radius: number,
+      dark: string, lit: string, rim = false,
+    ): void => {
+      const g = ctx.createLinearGradient(0, y, 0, y + height);
+      // `modelling` is how far apart the two ends of the panel are pushed.
+      // Above 1 the top goes past the lit colour, which is what gives the
+      // high-contrast styles their hard highlight.
+      g.addColorStop(0, mixHex(dark, lit, Math.min(1, 0.85 * w.modelling)));
+      g.addColorStop(0.55, mixHex(dark, lit, 0.22 * w.modelling));
+      g.addColorStop(1, dark);
+      ctx.fillStyle = g;
+      roundRectPath(ctx, x, y, width, height, radius);
       ctx.fill();
-      ctx.strokeStyle = '#15171a';
-      ctx.stroke();
+      if (w.outline) {
+        ctx.strokeStyle = w.outline;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+      if (rim && w.rimStrength > 0) {
+        ctx.save();
+        ctx.globalAlpha = w.rimStrength;
+        ctx.strokeStyle = w.rim;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y + 0.8);
+        ctx.lineTo(x + width - radius, y + 0.8);
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    // Contact shadow first, so everything else sits on top of it.
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#000000';
+    roundRectPath(ctx, -bodyLength - 4, -18, bodyLength + 10, 16, 8);
+    ctx.fill();
+    ctx.restore();
+
+    // Barrel and suppressor, behind the receiver.
+    panel(-bodyLength - (long ? 62 : 26), -46, long ? 62 : 26, 13, 2,
+      w.metal, w.metalLit, true);
+    if (suppressed) {
+      panel(-bodyLength - (long ? 118 : 76), -52, 58, 24, 8,
+        w.metal, w.metalLit, true);
     }
 
-    // Handguard
-    ctx.fillStyle = '#2a2d33';
-    roundRectPath(ctx, -bodyLength - 8, -48, long ? 78 : 40, 22, 4);
-    ctx.fill();
+    // Handguard.
+    panel(-bodyLength - 8, -48, long ? 78 : 40, 22, 4,
+      w.furniture, w.furnitureLit, true);
 
-    // Magazine - curve implies calibre without needing labels.
-    ctx.fillStyle = '#1d1f24';
+    // Magazine. The tilt implies calibre without needing a label.
     ctx.save();
     ctx.translate(-bodyLength * 0.42, -20);
     ctx.rotate(0.16);
-    ctx.fillRect(-13, 0, 26, long ? 62 : 34);
+    panel(-13, 0, 26, long ? 62 : 34, 3, w.metal, w.metalLit);
     ctx.restore();
 
-    // Grip and stock
-    ctx.fillStyle = '#26282d';
+    // Grip.
     ctx.save();
     ctx.translate(-bodyLength * 0.1, -20);
     ctx.rotate(0.3);
-    ctx.fillRect(-11, 0, 22, 48);
+    panel(-11, 0, 22, 48, 5, w.furniture, w.furnitureLit);
     ctx.restore();
-    if (long) {
-      ctx.fillStyle = '#25272c';
-      roundRectPath(ctx, -8, -50, 62, 30, 6);
-      ctx.fill();
-    }
 
-    // Optic or iron sights
+    // Stock.
+    if (long) panel(-8, -50, 62, 30, 6, w.furniture, w.furnitureLit, true);
+
+    // Receiver last of the body, so it reads as the frontmost plane.
+    panel(-bodyLength, -54, bodyLength, 34, 5, w.metal, w.metalLit, true);
+
+    // Selector marking: a small painted detail at the natural focal point of
+    // the shape. It is the one place a spot of the style's accent colour reads
+    // as a marking on the weapon rather than as a light on it.
+    ctx.fillStyle = w.detail;
+    ctx.fillRect(-bodyLength * 0.30, -32, 9, 3);
+    ctx.fillRect(-bodyLength * 0.30, -26, 5, 3);
+
+    // Optic or iron sights.
     if (optic) {
-      ctx.fillStyle = '#15171b';
-      roundRectPath(ctx, -bodyLength * 0.72, -84, 74, 30, 6);
-      ctx.fill();
-      ctx.fillStyle = '#2a3a44';
+      panel(-bodyLength * 0.72, -84, 74, 30, 6, w.metal, w.metalLit, true);
+      // Objective glass, tinted towards the rim colour so the coating reads.
+      const glass = ctx.createLinearGradient(0, -78, 0, -60);
+      glass.addColorStop(0, mixHex(w.metal, w.rim, 0.5));
+      glass.addColorStop(1, mixHex(w.metal, w.rim, 0.12));
+      ctx.fillStyle = glass;
       ctx.fillRect(-bodyLength * 0.72 + 6, -78, 62, 18);
     } else {
-      ctx.fillStyle = '#15171b';
+      ctx.fillStyle = w.outline || w.metal;
       ctx.fillRect(-bodyLength * 0.95, -66, 5, 14);
       ctx.fillRect(-bodyLength * 0.12, -66, 5, 14);
     }
 
-    // Hands
-    ctx.fillStyle = '#8d6a4c';
+    // Hands. Lit from the same direction as the weapon.
+    const handG = ctx.createLinearGradient(0, -10, 0, 24);
+    handG.addColorStop(0, '#a9805d');
+    handG.addColorStop(1, '#6d5138');
+    ctx.fillStyle = handG;
     ctx.beginPath();
     ctx.ellipse(-bodyLength * 0.08, 6, 22, 17, 0.3, 0, Math.PI * 2);
     ctx.fill();
@@ -1065,6 +1162,16 @@ export class RaidRenderer {
   get internalResolution(): string {
     return `${this.internalWidth}x${this.internalHeight}`;
   }
+}
+
+/** Blend two #rrggbb colours. `t` of 0 is `a`, 1 is `b`. */
+function mixHex(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16);
+  const pb = parseInt(b.slice(1), 16);
+  const r = Math.round(((pa >> 16) & 0xff) + (((pb >> 16) & 0xff) - ((pa >> 16) & 0xff)) * t);
+  const g = Math.round(((pa >> 8) & 0xff) + (((pb >> 8) & 0xff) - ((pa >> 8) & 0xff)) * t);
+  const bl = Math.round((pa & 0xff) + ((pb & 0xff) - (pa & 0xff)) * t);
+  return `#${((r << 16) | (g << 8) | bl).toString(16).padStart(6, '0')}`;
 }
 
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {

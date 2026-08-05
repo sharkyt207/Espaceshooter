@@ -89,3 +89,33 @@ export function bar(fraction: number, color: string, label?: string): HTMLElemen
     label ? el('span', { class: 'bar-label', text: label }) : null,
   ]);
 }
+
+/**
+ * Resolve a CSS custom property to a real colour.
+ *
+ * The DOM understands `var(--accent)`; a canvas does not. `fillStyle` takes a
+ * colour string and silently ignores anything it cannot parse, which means a
+ * variable reference there is not an error - it is an invisible shape, found
+ * later by wondering why the map has no markers on it.
+ *
+ * Cached per style, because `getComputedStyle` forces a style recalculation
+ * and the map redraws while the player is moving. The cache is keyed on the
+ * `data-style` attribute, so switching styles invalidates it exactly when the
+ * values actually change.
+ */
+const varCache = new Map<string, string>();
+let varCacheStyle = '';
+
+export function cssVar(name: string, fallback = '#000000'): string {
+  const style = document.documentElement.dataset.style ?? '';
+  if (style !== varCacheStyle) {
+    varCacheStyle = style;
+    varCache.clear();
+  }
+  const hit = varCache.get(name);
+  if (hit !== undefined) return hit;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const resolved = value || fallback;
+  varCache.set(name, resolved);
+  return resolved;
+}

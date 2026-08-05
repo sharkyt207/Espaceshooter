@@ -60,7 +60,7 @@ export class InventoryView {
         el('div', { class: 'panel-head', style: { border: 'none', padding: '6px 0 4px' } }, [
           el('span', { text: source.label }),
           el('span', { class: 'spacer', style: { flex: '1' } }),
-          el('span', { style: { color: '#5b6472' }, text: usage }),
+          el('span', { style: { color: 'var(--text-faint)' }, text: usage }),
         ]),
       );
       this.root.appendChild(this.renderGrid(source));
@@ -138,7 +138,7 @@ export class InventoryView {
           class: 'cond-strip',
           style: {
             width: `${fraction * 100}%`,
-            background: fraction > 0.6 ? '#4f9e6a' : fraction > 0.3 ? '#c8913a' : '#b8453a',
+            background: fraction > 0.6 ? 'var(--good)' : fraction > 0.3 ? 'var(--accent)' : 'var(--bad)',
           },
         }),
       );

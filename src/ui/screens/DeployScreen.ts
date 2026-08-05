@@ -68,9 +68,9 @@ export class DeployScreen implements Screen {
               (blueprint.hasBoss ? ` · ${blueprint.bossName}` : ''),
           }),
         ]),
-        selected ? el('span', { class: 'tag', style: { borderColor: '#c8913a', color: '#c8913a' }, text: 'Gewählt' }) : null,
+        selected ? el('span', { class: 'tag', style: { borderColor: 'var(--accent)', color: 'var(--accent)' }, text: 'Gewählt' }) : null,
       ].filter(Boolean) as HTMLElement[]);
-      if (selected) row.style.borderColor = '#c8913a';
+      if (selected) row.style.borderColor = 'var(--accent)';
       row.addEventListener('click', () => {
         this.selectedMap = blueprint.id;
         this.render();
@@ -109,13 +109,13 @@ export class DeployScreen implements Screen {
     briefing.append(
       el('div', { class: 'panel-head', style: { border: 'none', padding: '0 0 6px' }, text: 'Absetzzeit' }),
       timeRow,
-      el('div', { class: 'sub', style: { marginTop: '8px', color: '#8b95a3' }, text: timeProfile.blurb }),
+      el('div', { class: 'sub', style: { marginTop: '8px', color: 'var(--text-dim)' }, text: timeProfile.blurb }),
     );
     if (this.selectedTime !== 'day') {
       briefing.appendChild(
         el('div', {
           class: 'sub',
-          style: { marginTop: '6px', color: '#c8913a', lineHeight: '1.5' },
+          style: { marginTop: '6px', color: 'var(--accent)', lineHeight: '1.5' },
           text: MAP_NIGHT_NOTES[blueprint.id] ?? '',
         }),
       );
@@ -123,7 +123,7 @@ export class DeployScreen implements Screen {
     briefing.append(
       el('div', {
         class: 'sub',
-        style: { marginTop: '6px', color: '#5b6472' },
+        style: { marginTop: '6px', color: 'var(--text-faint)' },
         text: 'Das Wetter vor Ort steht erst beim Absetzen fest.',
       }),
       el('div', {
@@ -133,7 +133,7 @@ export class DeployScreen implements Screen {
       }),
       el('div', {
         class: 'sub',
-        style: { lineHeight: '1.55', color: '#8b95a3' },
+        style: { lineHeight: '1.55', color: 'var(--text-dim)' },
         text: MAP_BRIEFINGS[blueprint.id] ?? '',
       }),
     );
@@ -188,8 +188,8 @@ export class DeployScreen implements Screen {
     if (warnings.length > 0) {
       summary.appendChild(
         el('div', { style: { marginTop: '12px' } }, [
-          el('div', { class: 'panel-head', style: { border: 'none', padding: '0 0 4px', color: '#c8913a' }, text: 'Hinweise' }),
-          ...warnings.map((w) => el('div', { class: 'sub', style: { color: '#c8913a' }, text: `• ${w}` })),
+          el('div', { class: 'panel-head', style: { border: 'none', padding: '0 0 4px', color: 'var(--accent)' }, text: 'Hinweise' }),
+          ...warnings.map((w) => el('div', { class: 'sub', style: { color: 'var(--accent)' }, text: `• ${w}` })),
         ]),
       );
     }

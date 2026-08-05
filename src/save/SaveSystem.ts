@@ -4,6 +4,7 @@ import { GridContainer } from '../inventory/GridContainer';
 import type { GridSlotState, ItemStack } from '../inventory/ItemStack';
 import type { EquipSlot } from '../data/ItemTypes';
 import type { Profile } from '../meta/Profile';
+import { DEFAULT_STYLE, type StyleId } from '../render/Style';
 
 /**
  * SaveSystem - versioned persistence to localStorage.
@@ -65,6 +66,8 @@ export interface GameSettings {
    * the failure modes.
    */
   renderer: number;
+  /** Which visual direction the game is played in. See `render/Style.ts`. */
+  style: StyleId;
 }
 
 export function defaultSettings(): GameSettings {
@@ -80,6 +83,7 @@ export function defaultSettings(): GameSettings {
     primerSeen: false,
     postQuality: -1,
     renderer: -1,
+    style: DEFAULT_STYLE,
   };
 }
 

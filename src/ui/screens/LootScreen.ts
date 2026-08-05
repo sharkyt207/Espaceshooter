@@ -78,7 +78,7 @@ export class LootScreen implements Screen {
       `Verbleibend ${minutes}:${String(seconds).padStart(2, '0')}  ·  ` +
       `Last ${fmtWeight(player.carriedWeight)}  ·  ` +
       `Kontakte ${session.ai.engagedCount}`;
-    this.subtitleEl.style.color = session.ai.engagedCount > 0 ? '#b8453a' : '#8b95a3';
+    this.subtitleEl.style.color = session.ai.engagedCount > 0 ? 'var(--bad)' : 'var(--text-dim)';
   }
 
   render(): void {
@@ -114,7 +114,7 @@ export class LootScreen implements Screen {
           el('div', {
             class: 'title',
             text: stack ? defOf(stack).name : '— leer —',
-            style: { color: stack ? RARITY_COLOR[defOf(stack).rarity] : '#5b6472' },
+            style: { color: stack ? RARITY_COLOR[defOf(stack).rarity] : 'var(--text-faint)' },
           }),
         ]),
       ]);

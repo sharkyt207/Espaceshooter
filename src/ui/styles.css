@@ -944,7 +944,15 @@ html, body {
    `break-word` rather than `anywhere`: the latter also breaks ordinary words
    mid-syllable the moment a column gets tight. */
 .list-row .title,
-.list-row .sub { overflow-wrap: break-word; }
+.list-row .sub {
+  /* German compounds are long enough to overflow a narrow column, and
+     `break-word` splits them at an arbitrary letter - "Wertgegenstä nde".
+     Hyphenation breaks at syllables instead and marks the break, which is
+     what a reader expects. `anywhere` stays as the last resort for strings
+     with no syllables to find, like an item code. */
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
 
 /* --- the base, drawn ----------------------------------------------------- */
 
@@ -1705,3 +1713,76 @@ html, body {
   .result-tile .v { font-size: 16px; }
   .result-grid { gap: 6px; }
 }
+
+/* ==========================================================================
+   Style-specific chrome
+   ==========================================================================
+
+   Almost all of a style is carried by the custom properties, because every
+   screen is already written against them. What lives here is the handful of
+   things a colour cannot say: whether a panel has weight behind it, whether
+   the interface is pretending to be printed, whether corners are soft.
+
+   Scoped on the `data-style` attribute that `applyStyleToDocument` sets, so
+   adding a style means adding a block here and nothing else. */
+
+/* Signal: panels sit above the background rather than being cut out of it,
+   and the accent carries a faint glow. This is the direction built to be read
+   at arm's length in daylight, where flat-on-flat loses. */
+[data-style='signal'] .panel,
+[data-style='signal'] .card {
+  box-shadow: var(--chrome-glow);
+}
+
+[data-style='signal'] .btn.primary {
+  box-shadow: 0 0 12px rgba(53, 200, 216, 0.28);
+}
+
+[data-style='signal'] .panel-head {
+  background: linear-gradient(180deg, rgba(53, 200, 216, 0.09), transparent);
+}
+
+/* Archiv: printed matter. Hard corners come from --radius, but the rules and
+   the letter-spacing are what actually make it read as a document rather than
+   as an interface with the corners turned off. */
+[data-style='archiv'] .panel-head {
+  border-bottom: 2px solid var(--line-bright);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+[data-style='archiv'] .section-label {
+  letter-spacing: 0.2em;
+}
+
+[data-style='archiv'] .btn {
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* A very faint horizontal rule pattern across every panel, matching the
+   scanlines the raid gets in this style. Two pixels on, two off, at four
+   percent - visible as texture, never as stripes. */
+[data-style='archiv'] .panel::after,
+[data-style='archiv'] .card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    180deg,
+    rgba(0, 0, 0, 0.04) 0px,
+    rgba(0, 0, 0, 0.04) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+[data-style='archiv'] .panel,
+[data-style='archiv'] .card {
+  position: relative;
+}
+
+/* Feldbericht: nothing. The absence is the position - no glow, no texture, no
+   letter-spacing. Listed explicitly so the next person does not assume it was
+   forgotten. */

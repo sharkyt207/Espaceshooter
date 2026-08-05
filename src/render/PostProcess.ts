@@ -24,6 +24,8 @@
  * canvas, no readback and no allocation per frame.
  */
 
+import { DEFAULT_STYLE, STYLES, type GradeSpec } from './Style';
+
 export interface PostSettings {
   /** 0 disables the pass entirely. */
   bloomStrength: number;
@@ -33,6 +35,19 @@ export interface PostSettings {
   toneMapping: number;
   /** Multiplies the whole image before tone mapping. */
   exposure: number;
+  /**
+   * The active style's grade.
+   *
+   * This path can afford less than the shader can, and says so rather than
+   * pretending otherwise: the split-tone and the contrast are folded into the
+   * tone curve, which makes them per-channel rather than driven by true
+   * luminance - close, and free, because the curve is already a lookup table.
+   * Saturation cannot be expressed that way and gets its own pass, paid for
+   * only by the styles that ask for it. Aberration and scanlines are not
+   * attempted here at all; both would cost a resample per pixel in JavaScript,
+   * which is exactly the budget this renderer does not have.
+   */
+  grade: GradeSpec;
 }
 
 export function defaultPostSettings(): PostSettings {
@@ -41,6 +56,7 @@ export function defaultPostSettings(): PostSettings {
     bloomThreshold: 0.62,
     toneMapping: 1,
     exposure: 1.06,
+    grade: STYLES[DEFAULT_STYLE].grade,
   };
 }
 
@@ -63,13 +79,16 @@ export class PostProcess {
   private colWx = new Float32Array(0);
 
   /**
-   * Tone curve as a lookup table.
+   * Tone curves as lookup tables, one per channel.
    *
-   * The curve is evaluated 512 times at startup instead of three times per
-   * pixel per frame. At 960x441 that is the difference between 512 and 1.3
-   * million evaluations.
+   * Each is evaluated 512 times when the style changes instead of three times
+   * per pixel per frame. At 960x441 that is the difference between 1536
+   * evaluations and 1.3 million - and splitting one table into three is what
+   * lets the style's tint ride along at no per-pixel cost at all.
    */
-  private toneLut = new Uint8Array(512);
+  private lutR = new Uint8Array(512);
+  private lutG = new Uint8Array(512);
+  private lutB = new Uint8Array(512);
   private lutKey = '';
 
   settings = defaultPostSettings();
@@ -100,20 +119,62 @@ export class PostProcess {
   }
 
   private ensureLut(): void {
-    const key = `${this.settings.toneMapping}|${this.settings.exposure}`;
+    const g = this.settings.grade;
+    const key = `${this.settings.toneMapping}|${this.settings.exposure}|` +
+      `${g.shadowTint.join(',')}|${g.shadowAmount}|` +
+      `${g.highlightTint.join(',')}|${g.highlightAmount}|${g.contrast}`;
     if (key === this.lutKey) return;
     this.lutKey = key;
 
     const { toneMapping, exposure } = this.settings;
-    for (let i = 0; i < this.toneLut.length; i++) {
-      // Input runs to 2x white so the curve has headroom to roll off from.
-      const x = (i / (this.toneLut.length - 1)) * 2 * exposure;
-      // Reinhard-with-shoulder: cheap, monotonic, and it keeps mid-tones
-      // almost unchanged so the game does not suddenly look washed out.
-      const mapped = (x * (1 + x / 4)) / (1 + x);
-      const blended = x * (1 - toneMapping) + mapped * toneMapping;
-      const v = blended * 255;
-      this.toneLut[i] = v < 0 ? 0 : v > 255 ? 255 : v | 0;
+    const luts: [Uint8Array, number][] = [[this.lutR, 0], [this.lutG, 1], [this.lutB, 2]];
+
+    for (const [lut, channel] of luts) {
+      for (let i = 0; i < lut.length; i++) {
+        // Input runs to 2x white so the curve has headroom to roll off from.
+        const x = (i / (lut.length - 1)) * 2 * exposure;
+        // Reinhard-with-shoulder: cheap, monotonic, and it keeps mid-tones
+        // almost unchanged so the game does not suddenly look washed out.
+        const mapped = (x * (1 + x / 4)) / (1 + x);
+        let v = x * (1 - toneMapping) + mapped * toneMapping;
+
+        // Split-tone. The shader weights these by the pixel's luminance; here
+        // the channel's own value stands in for it, which is the approximation
+        // that buys the whole grade for free.
+        const lum = v < 0 ? 0 : v > 1 ? 1 : v;
+        v *= 1 + (g.shadowTint[channel] - 1) * (1 - lum) * g.shadowAmount;
+        v *= 1 + (g.highlightTint[channel] - 1) * lum * g.highlightAmount;
+
+        // Contrast, pivoted on mid grey.
+        v = (v - 0.5) * g.contrast + 0.5;
+
+        const out = v * 255;
+        lut[i] = out < 0 ? 0 : out > 255 ? 255 : out | 0;
+      }
+    }
+  }
+
+  /**
+   * Pull every pixel towards or away from its own luminance.
+   *
+   * A separate pass because saturation is the one part of the grade that
+   * cannot live in a per-channel curve - it needs all three channels at once.
+   * Only styles that actually change it pay for this.
+   */
+  private applySaturation(pixels: Uint32Array, saturation: number): void {
+    for (let i = 0; i < pixels.length; i++) {
+      const c = pixels[i];
+      const r = c & 0xff;
+      const gch = (c >> 8) & 0xff;
+      const b = (c >> 16) & 0xff;
+      const lum = r * 0.299 + gch * 0.587 + b * 0.114;
+      let nr = lum + (r - lum) * saturation;
+      let ng = lum + (gch - lum) * saturation;
+      let nb = lum + (b - lum) * saturation;
+      nr = nr < 0 ? 0 : nr > 255 ? 255 : nr;
+      ng = ng < 0 ? 0 : ng > 255 ? 255 : ng;
+      nb = nb < 0 ? 0 : nb > 255 ? 255 : nb;
+      pixels[i] = (255 << 24) | ((nb | 0) << 16) | ((ng | 0) << 8) | (nr | 0);
     }
   }
 
@@ -134,6 +195,9 @@ export class PostProcess {
     } else {
       this.toneOnly(pixels);
     }
+
+    const saturation = this.settings.grade.saturation;
+    if (saturation !== 1) this.applySaturation(pixels, saturation);
   }
 
   /**
@@ -241,8 +305,10 @@ export class PostProcess {
   private composite(pixels: Uint32Array, strength: number): void {
     const { width, height, smallW, smallH } = this;
     const bright = this.bright;
-    const lut = this.toneLut;
-    const lutMax = lut.length - 1;
+    const lutR = this.lutR;
+    const lutG = this.lutG;
+    const lutB = this.lutB;
+    const lutMax = lutR.length - 1;
     const scaleToLut = lutMax / (2 * 255);
 
     // The x sampling geometry repeats every DOWNSCALE pixels and never changes
@@ -285,9 +351,9 @@ export class PostProcess {
             const gi = ((c >> 8) & 0xff) * scaleToLut;
             const bi = ((c >> 16) & 0xff) * scaleToLut;
             pixels[idx] = (255 << 24) |
-              (lut[bi > lutMax ? lutMax : bi | 0] << 16) |
-              (lut[gi > lutMax ? lutMax : gi | 0] << 8) |
-              lut[ri > lutMax ? lutMax : ri | 0];
+              (lutB[bi > lutMax ? lutMax : bi | 0] << 16) |
+              (lutG[gi > lutMax ? lutMax : gi | 0] << 8) |
+              lutR[ri > lutMax ? lutMax : ri | 0];
           }
           continue;
         }
@@ -318,9 +384,9 @@ export class PostProcess {
           const gi = g * scaleToLut;
           const bi = b * scaleToLut;
           pixels[idx] = (255 << 24) |
-            (lut[bi > lutMax ? lutMax : bi | 0] << 16) |
-            (lut[gi > lutMax ? lutMax : gi | 0] << 8) |
-            lut[ri > lutMax ? lutMax : ri | 0];
+            (lutB[bi > lutMax ? lutMax : bi | 0] << 16) |
+            (lutG[gi > lutMax ? lutMax : gi | 0] << 8) |
+            lutR[ri > lutMax ? lutMax : ri | 0];
         }
       }
     }
@@ -328,8 +394,10 @@ export class PostProcess {
 
   /** Tone mapping without bloom, for the low quality setting. */
   private toneOnly(pixels: Uint32Array): void {
-    const lut = this.toneLut;
-    const lutMax = lut.length - 1;
+    const lutR = this.lutR;
+    const lutG = this.lutG;
+    const lutB = this.lutB;
+    const lutMax = lutR.length - 1;
     const scaleToLut = lutMax / (2 * 255);
     const n = this.width * this.height;
     for (let i = 0; i < n; i++) {
@@ -338,9 +406,9 @@ export class PostProcess {
       const gi = ((c >> 8) & 0xff) * scaleToLut;
       const bi = ((c >> 16) & 0xff) * scaleToLut;
       pixels[i] = (255 << 24) |
-        (lut[bi > lutMax ? lutMax : bi | 0] << 16) |
-        (lut[gi > lutMax ? lutMax : gi | 0] << 8) |
-        lut[ri > lutMax ? lutMax : ri | 0];
+        (lutB[bi > lutMax ? lutMax : bi | 0] << 16) |
+        (lutG[gi > lutMax ? lutMax : gi | 0] << 8) |
+        lutR[ri > lutMax ? lutMax : ri | 0];
     }
   }
 }

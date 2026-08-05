@@ -12,6 +12,7 @@ import { circleFits, moveCircle } from '../src/world/Physics';
 import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
 import { AXIS_UP, AXIS_WEST, buildWorldMesh, FLOATS_PER_VERTEX } from '../src/render/gl/WorldMesh';
+import { DEFAULT_STYLE, STYLE_ORDER, STYLES, styleById } from '../src/render/Style';
 import { MAP_BLUEPRINTS } from '../src/data/MapData';
 import { ItemDB } from '../src/data/ItemDatabase';
 import { GridContainer } from '../src/inventory/GridContainer';
@@ -1124,5 +1125,91 @@ describe('WorldMesh', () => {
         assert.ok(ao > 0 && ao <= 1, `vertex ${i} has an out-of-range occlusion of ${ao}`);
       }
     }
+  });
+});
+
+describe('Style', () => {
+  test('every style is complete and internally consistent', () => {
+    for (const id of STYLE_ORDER) {
+      const style = STYLES[id];
+      assert.equal(style.id, id, `${id} is filed under the wrong key`);
+      assert.ok(style.name.length > 0, `${id} needs a name for the settings list`);
+      assert.ok(style.tagline.length > 0, `${id} needs a tagline`);
+
+      const g = style.grade;
+      assert.ok(g.saturation >= 0, `${id} cannot have negative saturation`);
+      assert.ok(g.contrast > 0, `${id} needs positive contrast`);
+      for (const [label, v] of [
+        ['grain', g.grain], ['vignette', g.vignette],
+        ['aberration', g.aberration], ['scanlines', g.scanlines],
+        ['bloom', g.bloomStrength],
+      ] as const) {
+        assert.ok(v >= 0 && v <= 2, `${id} has an implausible ${label} of ${v}`);
+      }
+      assert.equal(g.shadowTint.length, 3);
+      assert.equal(g.highlightTint.length, 3);
+    }
+  });
+
+  test('every style defines the same set of custom properties', () => {
+    // A style missing a property inherits whichever one the previous style
+    // left on the document root, which is the sort of bug that only shows up
+    // after switching twice.
+    const reference = Object.keys(STYLES[STYLE_ORDER[0]].css).sort();
+    for (const id of STYLE_ORDER) {
+      assert.deepEqual(
+        Object.keys(STYLES[id].css).sort(),
+        reference,
+        `${id} does not declare the same properties as the others`,
+      );
+    }
+  });
+
+  test('every colour is a parseable hex value', () => {
+    const hex = /^#[0-9a-f]{6}$/i;
+    for (const id of STYLE_ORDER) {
+      const style = STYLES[id];
+      for (const [name, value] of Object.entries(style.css)) {
+        // Sizes and shadows are not colours; only check the ones that are.
+        if (!value.startsWith('#')) continue;
+        assert.ok(hex.test(value), `${id} ${name} is not a hex colour: ${value}`);
+      }
+      const w = style.weapon;
+      for (const [name, value] of Object.entries(w)) {
+        if (typeof value !== 'string' || value === '') continue;
+        assert.ok(hex.test(value), `${id} weapon.${name} is not a hex colour: ${value}`);
+      }
+    }
+  });
+
+  test('the three are actually different from each other', () => {
+    // The point of offering a choice is that it is one. This catches a style
+    // added by copying another and half-edited.
+    const seen = new Set<string>();
+    for (const id of STYLE_ORDER) {
+      const g = STYLES[id].grade;
+      const fingerprint = [
+        g.saturation, g.contrast, g.grain, g.aberration, g.scanlines,
+        ...g.shadowTint, ...g.highlightTint,
+      ].join(',');
+      assert.ok(!seen.has(fingerprint), `${id} has the same grade as another style`);
+      seen.add(fingerprint);
+      assert.notEqual(STYLES[id].css['--accent'], undefined);
+    }
+    const accents = STYLE_ORDER.map((id) => STYLES[id].css['--accent']);
+    assert.equal(new Set(accents).size, accents.length, 'two styles share an accent colour');
+  });
+
+  test('the default style exists', () => {
+    assert.ok(STYLES[DEFAULT_STYLE], 'the default has to name a real style');
+    assert.ok(STYLE_ORDER.includes(DEFAULT_STYLE), 'and has to be offered in the list');
+  });
+
+  test('an unknown id falls back rather than throwing', () => {
+    // Settings come out of localStorage, which can hold a style from a build
+    // that no longer exists.
+    assert.equal(styleById('does-not-exist').id, DEFAULT_STYLE);
+    assert.equal(styleById('').id, DEFAULT_STYLE);
+    assert.equal(styleById('signal').id, 'signal');
   });
 });

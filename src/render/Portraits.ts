@@ -23,6 +23,8 @@
  * any real person is used or intended.
  */
 
+import { DEFAULT_STYLE, STYLES, type PortraitSpec } from './Style';
+
 export interface FaceSpec {
   /** Base skin tone, before lighting. */
   skin: string;
@@ -98,7 +100,11 @@ function hashNoise(seed: number): () => number {
  * the light, then the features that the light reveals, then the treatment over
  * everything.
  */
-export function drawPortrait(spec: FaceSpec, seed: number): HTMLCanvasElement {
+export function drawPortrait(
+  spec: FaceSpec,
+  seed: number,
+  portraitStyle: PortraitSpec = STYLES[DEFAULT_STYLE].portrait,
+): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = PORTRAIT_W;
   canvas.height = PORTRAIT_H;
@@ -145,7 +151,7 @@ export function drawPortrait(spec: FaceSpec, seed: number): HTMLCanvasElement {
 
   ctx.restore();
 
-  applyTreatment(ctx, w, h, spec, rng);
+  applyTreatment(ctx, w, h, spec, rng, portraitStyle);
   return canvas;
 }
 
@@ -941,37 +947,67 @@ function applyTreatment(
   h: number,
   spec: FaceSpec,
   rng: () => number,
+  style: PortraitSpec,
 ): void {
   const image = ctx.getImageData(0, 0, w, h);
   const data = image.data;
-  const [tr, tg, tb] = parseHex(spec.tint);
+  // The character's own tint, pulled towards the style's. How far is the
+  // difference between four people photographed by four cameras and four
+  // people photographed by one.
+  const [ur, ug, ub] = parseHex(style.unify);
+  const [ctr, ctg, ctb] = parseHex(spec.tint);
+  const k = style.unifyAmount;
+  const tr = ctr + (ur - ctr) * k;
+  const tg = ctg + (ug - ctg) * k;
+  const tb = ctb + (ub - ctb) * k;
 
   for (let i = 0; i < data.length; i += 4) {
-    // Luminance, then pull colour towards the tint at the lit end only, so
-    // shadows stay neutral and the image does not turn into a flat wash.
     const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) / 255;
-    const pull = lum * lum * 0.5;
+
+    // Drain colour first, where the style asks for it. Doing this before the
+    // tint rather than after is what makes a duotone: the image is reduced to
+    // tone, then the tone is coloured. Reversing the order leaves the original
+    // skin and cloth hues fighting the tint.
+    if (style.desaturation > 0) {
+      const grey = lum * 255;
+      data[i] += (grey - data[i]) * style.desaturation;
+      data[i + 1] += (grey - data[i + 1]) * style.desaturation;
+      data[i + 2] += (grey - data[i + 2]) * style.desaturation;
+    }
+
+    // Pull towards the tint at the lit end, so shadows stay dense and the
+    // image does not turn into a flat wash.
+    const pull = lum * lum * style.tintPull * 2;
     data[i] += (tr - data[i]) * pull;
     data[i + 1] += (tg - data[i + 1]) * pull;
     data[i + 2] += (tb - data[i + 2]) * pull;
 
+    // Contrast, pivoted on mid grey.
+    if (style.contrast !== 1) {
+      data[i] = (data[i] - 128) * style.contrast + 128;
+      data[i + 1] = (data[i + 1] - 128) * style.contrast + 128;
+      data[i + 2] = (data[i + 2] - 128) * style.contrast + 128;
+    }
+
     // Grain, stronger in the mid-tones where a sensor is actually noisiest.
-    const grain = (rng() - 0.5) * 26 * (0.35 + (1 - Math.abs(lum - 0.5) * 2) * 0.65);
+    const grain = (rng() - 0.5) * style.grain * (0.35 + (1 - Math.abs(lum - 0.5) * 2) * 0.65);
     data[i] += grain;
     data[i + 1] += grain;
     data[i + 2] += grain;
   }
   ctx.putImageData(image, 0, 0);
 
-  // Scanlines: every third row, very slight. Enough to read as a screen
-  // capture, not enough to be a filter.
-  ctx.fillStyle = 'rgba(0,0,0,0.10)';
-  for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+  // Scanlines: every third row. Enough to read as a screen capture at low
+  // strength, a deliberate artefact at high.
+  if (style.scanlines > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${style.scanlines})`;
+    for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1);
+  }
 
   // Vignette.
   const vig = ctx.createRadialGradient(w * 0.5, h * 0.42, w * 0.25, w * 0.5, h * 0.5, w * 0.78);
   vig.addColorStop(0, 'rgba(0,0,0,0)');
-  vig.addColorStop(1, 'rgba(0,0,0,0.55)');
+  vig.addColorStop(1, `rgba(0,0,0,${style.vignette})`);
   ctx.fillStyle = vig;
   ctx.fillRect(0, 0, w, h);
 }
@@ -1016,6 +1052,24 @@ export const TRADER_FACES: Record<string, FaceSpec> = {
 /** Portraits are expensive enough to draw that they are built once and kept. */
 const cache = new Map<string, HTMLCanvasElement>();
 
+/** The treatment new portraits are drawn with. */
+let activePortraitStyle: PortraitSpec = STYLES[DEFAULT_STYLE].portrait;
+
+/**
+ * Switch the treatment and throw away every cached portrait.
+ *
+ * The treatment is baked into the pixels - it is a per-pixel pass over the
+ * finished drawing, not a filter hung in front of it - so a cached portrait
+ * belongs to the style it was drawn under and cannot be reused across a
+ * change. Four faces at 220x264 is a few milliseconds to redraw, paid once
+ * when the player picks a style.
+ */
+export function setPortraitStyle(style: PortraitSpec): void {
+  if (style === activePortraitStyle) return;
+  activePortraitStyle = style;
+  cache.clear();
+}
+
 export function portraitFor(id: string): HTMLCanvasElement | null {
   const cached = cache.get(id);
   if (cached) return cached;
@@ -1023,7 +1077,7 @@ export function portraitFor(id: string): HTMLCanvasElement | null {
   if (!spec) return null;
   let seed = 0;
   for (let i = 0; i < id.length; i++) seed = (seed * 31 + id.charCodeAt(i)) >>> 0;
-  const canvas = drawPortrait(spec, seed);
+  const canvas = drawPortrait(spec, seed, activePortraitStyle);
   cache.set(id, canvas);
   return canvas;
 }
