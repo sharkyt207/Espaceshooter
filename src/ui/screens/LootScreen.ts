@@ -277,6 +277,36 @@ export class LootScreen implements Screen {
       });
     }
 
+    // Cartridge choice, offered only on ammunition the weapon in your hands
+    // can actually chamber - a 9 mm box while carrying a rifle is not a
+    // decision, it is a dead button.
+    //
+    // Worth having because the automatic pick is genuinely bad. It takes the
+    // highest penetration in the bag, which against an unarmoured scavenger
+    // throws away a third of the damage: 5.45 BP is 44 damage at 44
+    // penetration, 5.45 HP is 66 at 12. Load for flesh or load for plates -
+    // that is the decision, and it was being made for the player.
+    if (def.ammo && !fromContainer) {
+      const chambered = session.playerWeapon.resolved?.caliber;
+      if (chambered && def.ammo.caliber === chambered) {
+        const isChoice = session.preferredAmmo === def.id;
+        actions.push({
+          label: isChoice ? 'Wahl aufheben' : 'Diese Sorte laden',
+          kind: isChoice ? 'ghost' : 'primary',
+          onTap: () => {
+            session.setPreferredAmmo(isChoice ? null : def.id);
+            this.actions.notify(
+              isChoice
+                ? 'Munitionswahl zurückgesetzt - stärkste Durchschlagskraft'
+                : `${def.name} beim nächsten Nachladen`,
+              'good',
+            );
+            this.render();
+          },
+        });
+      }
+    }
+
     if (!fromContainer && !isEquipped) {
       actions.push({
         label: 'Fallen lassen',

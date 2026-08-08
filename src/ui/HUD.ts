@@ -5,7 +5,7 @@ import type { RaidSession } from '../raid/RaidSession';
 import type { GameBus, NotificationPayload } from '../core/GameEvents';
 import { BODY_PARTS, type BodyPart } from '../data/ItemTypes';
 import { ItemDB } from '../data/ItemDatabase';
-import { FIRE_MODE_LABEL } from '../weapons/WeaponRuntime';
+import { FIRE_MODE_LABEL, peekNextRound } from '../weapons/WeaponRuntime';
 import { clamp01 } from '../core/Math2D';
 
 /**
@@ -470,8 +470,21 @@ export class HUD {
     const durability = resolved.durability;
     this.weaponNameEl.style.color = durability < 35 ? 'var(--bad)' : durability < 60 ? 'var(--accent)' : 'var(--text-dim)';
 
+    // Which cartridge is about to leave the barrel.
+    //
+    // Read from the magazine rather than from the player's preference,
+    // because those are different things and the difference is the whole
+    // point: choosing a round arms the *next reload*, so a player who swaps to
+    // armour-piercing and walks into a fight is still firing whatever is
+    // already loaded. Showing the preference here would tell them a
+    // comfortable lie at the exact moment it matters.
+    const next = controller.weapon ? peekNextRound(controller.weapon) : null;
+    const roundName = next ? ItemDB.tryGet(next)?.shortName : null;
+
     this.fireModeEl.textContent =
-      `${FIRE_MODE_LABEL[controller.currentFireMode]}${resolved.suppressed ? ' · GEDÄMPFT' : ''}`;
+      `${FIRE_MODE_LABEL[controller.currentFireMode]}` +
+      `${roundName ? ` · ${roundName}` : ''}` +
+      `${resolved.suppressed ? ' · GEDÄMPFT' : ''}`;
   }
 
   /**

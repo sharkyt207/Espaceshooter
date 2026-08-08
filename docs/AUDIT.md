@@ -20,6 +20,7 @@ bestanden jede Prüfung, die den Code liest, und keine, die das Verhalten misst:
 | Zielhilfe | Regler in den Einstellungen ohne jede Wirkung | `aimAssistActive` wurde gelesen, aber von nichts gesetzt |
 | Partikelbudget | Jedes Gerät erzeugte die volle Anzahl, egal wie schlecht es lief | `EffectSystem.quality` dokumentierte sich als „vom Governor gesenkt" und wurde nie gesenkt |
 | Sprung/Vault | Taste belegt, Funktion deklariert, nie verdrahtet | (in einem früheren Durchgang behoben) |
+| Munitionswahl | `preferredAmmo` wurde beim Nachladen ausgewertet und von nichts gesetzt | keine Oberfläche dafür — inzwischen gebaut |
 
 Nachdem das Muster erkannt war, habe ich gezielt danach gesucht statt darauf zu
 warten, wieder darüber zu stolpern: ein Scan über alle öffentlichen Felder, die
@@ -80,6 +81,7 @@ wie das Ziel selbst.
 | Anbauteile | 34, mit achsengetrennter Wirkung: Griff waagerecht, Schaft senkrecht |
 | Körperteilschaden | 7 Zonen, Blutungen, Brüche, Durchschuss auf zerstörte Glieder |
 | Munition, Kaliber | 42 Sorten, Penetration und Fragmentierung getrennt |
+| Munitionswahl | **in diesem Durchgang gebaut** — pro Sorte im Inventar wählbar, wirkt beim nächsten Nachladen |
 
 ---
 
@@ -180,7 +182,7 @@ für das Compositing etwa 100 ms je Bild.
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
 | Karten | 3 (96², 78², 66²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 143 |
+| Simulationstests | 147 |
 
 ---
 
@@ -188,7 +190,7 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 143 Simulationstests, ohne Browser |
+| `npm test` | 147 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
 | `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |
@@ -220,19 +222,12 @@ Ehrlich, und nach Gewicht sortiert.
    Bildraten auf echten Telefonen nicht. Das ist die größte offene Unbekannte
    im ganzen Projekt.
 
-4. **Munition lässt sich nicht auswählen.** `WeaponController.preferredAmmo`
-   existiert und wird beim Nachladen ausgewertet — gesetzt wird es von nichts,
-   weil es keine Oberfläche dafür gibt. Für ein Spiel dieser Art ist die
-   Munitionswahl eine der wichtigsten Entscheidungen überhaupt (Penetration
-   gegen Schaden), also ist das keine Kleinigkeit, sondern die größte offene
-   *Spielfunktion*. Der Haken ist da; die Bedienung fehlt.
-
-5. **Inventarzellen sind auf kurzen Bildschirmen 32 px groß**, unter der
+4. **Inventarzellen sind auf kurzen Bildschirmen 32 px groß**, unter der
    üblichen Empfehlung von 44 px für Berührungsziele. Vertretbar, weil
    Gegenstände über mehrere Zellen reichen und Auswahl per Antippen statt
    Ziehen läuft — aber ein 1×1-Gegenstand bleibt ein kleines Ziel.
 
-6. **Der Smoke-Test läuft gegen eine gesättigte Software-Rasterung.** Er hält
+5. **Der Smoke-Test läuft gegen eine gesättigte Software-Rasterung.** Er hält
    den Loop für Aufnahmen an und wiederholt einmal; das ist Kompensation für
    die Umgebung, nicht für das Spiel. Auf einer Maschine mit GPU wäre nichts
    davon nötig.

@@ -15,6 +15,8 @@ import { AXIS_UP, AXIS_WEST, buildWorldMesh, FLOATS_PER_VERTEX } from '../src/re
 import { DEFAULT_STYLE, STYLE_ORDER, STYLES, styleById } from '../src/render/Style';
 import { filmicToneMap } from '../src/render/PostProcess';
 import { COMPOSITE_FS } from '../src/render/gl/Shaders';
+import { WeaponController } from '../src/weapons/WeaponController';
+import { peekNextRound } from '../src/weapons/WeaponRuntime';
 import {
   buildPattern, patternFor, stepAt, PATTERN_BY_CLASS,
 } from '../src/weapons/RecoilPattern';
@@ -1136,6 +1138,109 @@ describe('WorldMesh', () => {
         assert.ok(ao > 0 && ao <= 1, `vertex ${i} has an out-of-range occlusion of ${ao}`);
       }
     }
+  });
+});
+
+describe('Ammunition choice', () => {
+  // The gun used to pick the highest-penetration round in the bag, always, and
+  // the player had no way to say otherwise. That auto-pick is frequently the
+  // worst available choice - against an unarmoured target, armour-piercing
+  // throws away a third of the damage - so this checks two things: that the
+  // trade-off in the data is real enough to be worth a decision, and that the
+  // decision actually reaches the magazine.
+
+  const NEUTRAL = { gearErgoPenalty: 0, handlingSkill: 0, recoilSkill: 0 };
+  /** Standing still, not aiming - none of it matters for a reload. */
+  const FIRE_CTX = {
+    x: 5, y: 5, z: 1.5, angle: 0, pitch: 0, speed: 0, stance: 2 as const,
+    swayMultiplier: 1, resolve: NEUTRAL,
+  };
+
+  const inventoryWith = (entries: [string, number][]): Inventory => {
+    const inv = new Inventory();
+    for (const [id, count] of entries) {
+      const stack = createStack(id);
+      stack.count = count;
+      assert.ok(inv.store(stack), `could not store ${id}`);
+    }
+    return inv;
+  };
+
+  const controllerFor = (weaponId: string, magId: string, inv: Inventory) => {
+    const bus = new EventBus<Record<string, never>>() as never;
+    const effects = new EffectSystem(64, 64);
+    const ballistics = new BallisticsSystem(bus, effects, 7);
+    const controller = new WeaponController(bus, ballistics, 1, true, 7);
+    const weapon = createStack(weaponId);
+    weapon.magazine = createStack(magId);
+    controller.setWeapon(weapon, NEUTRAL, true);
+    return { controller, weapon, inv };
+  };
+
+  /**
+   * Reloading is staged over time, so drive the clock until it settles.
+   *
+   * The budget is generous because loading loose rounds is genuinely slow -
+   * roughly a third of a second per cartridge, so filling a thirty-round
+   * magazine from a pocket of loose ammunition takes about thirteen seconds.
+   * My first version allowed ten and reported "the reload never finished",
+   * which was true and told me nothing about the feature under test.
+   */
+  const reloadFully = (controller: WeaponController, inv: Inventory): void => {
+    assert.ok(controller.reload(inv), 'the reload should have been accepted');
+    for (let i = 0; i < 3600 && controller.isBusy; i++) {
+      controller.update(1 / 60, FIRE_CTX);
+    }
+    assert.ok(!controller.isBusy, 'the reload never finished');
+  };
+
+  test('penetration is paid for in damage, so the choice is a real one', () => {
+    // If this ever stops holding, the feature above is pointless - there is no
+    // decision when one round is simply better.
+    const soft = ItemDB.get('ammo_545_hp').ammo!;
+    const hard = ItemDB.get('ammo_545_bp').ammo!;
+    assert.ok(
+      hard.penetration > soft.penetration,
+      `the armour round should out-penetrate (${hard.penetration} vs ${soft.penetration})`,
+    );
+    assert.ok(
+      soft.damage > hard.damage * 1.2,
+      `the soft round should hit flesh materially harder (${soft.damage} vs ${hard.damage})`,
+    );
+  });
+
+  test('with no preference it loads the hardest-hitting penetrator', () => {
+    const inv = inventoryWith([['ammo_545_hp', 60], ['ammo_545_bp', 60]]);
+    const { controller, weapon } = controllerFor('wp_sg545', 'mag_545_30', inv);
+    reloadFully(controller, inv);
+    assert.equal(
+      peekNextRound(weapon), 'ammo_545_bp',
+      'the automatic pick is highest penetration',
+    );
+  });
+
+  test('a preference overrides it', () => {
+    const inv = inventoryWith([['ammo_545_hp', 60], ['ammo_545_bp', 60]]);
+    const { controller, weapon } = controllerFor('wp_sg545', 'mag_545_30', inv);
+    controller.preferredAmmo = 'ammo_545_hp';
+    reloadFully(controller, inv);
+    assert.equal(
+      peekNextRound(weapon), 'ammo_545_hp',
+      'the player asked for the soft round and should get it',
+    );
+  });
+
+  test('a preference it cannot honour falls back rather than failing', () => {
+    // Asked for a cartridge that is either the wrong calibre or not carried.
+    // Refusing to reload would be the worst possible reading of "preference".
+    const inv = inventoryWith([['ammo_545_bp', 60]]);
+    const { controller, weapon } = controllerFor('wp_sg545', 'mag_545_30', inv);
+    controller.preferredAmmo = 'ammo_9_hp'; // wrong calibre entirely
+    reloadFully(controller, inv);
+    assert.equal(
+      peekNextRound(weapon), 'ammo_545_bp',
+      'an unusable preference must fall back to the automatic pick, not jam the gun',
+    );
   });
 });
 

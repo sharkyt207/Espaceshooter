@@ -365,6 +365,32 @@ export class RaidSession {
   }
 
   /**
+   * Choose which cartridge the next reload should load, or clear the choice.
+   *
+   * Without this the weapon always auto-picked the highest-penetration round
+   * in the bag, which sounds sensible and is frequently the worst available
+   * choice: 5.45 BP is 44 damage at 44 penetration, 5.45 HP is 66 at 12. Every
+   * scavenger in a jacket takes fifty per cent longer to put down because the
+   * gun helpfully loaded armour-piercing for a fight that had no armour in it.
+   *
+   * The decision - do I load for flesh or for plates - is one of the better
+   * ones this genre has, and it was being made for the player, badly. The
+   * auto-pick stays as the fallback for anyone who does not want to think
+   * about it, and now it can be overridden.
+   *
+   * Takes effect on the next reload rather than immediately: a magazine
+   * already in the weapon holds what it holds.
+   */
+  setPreferredAmmo(ammoId: string | null): void {
+    this.playerWeapon.preferredAmmo = ammoId;
+  }
+
+  /** The player's current cartridge choice, or null for automatic. */
+  get preferredAmmo(): string | null {
+    return this.playerWeapon.preferredAmmo;
+  }
+
+  /**
    * Is the crosshair on a hostile the player can actually see?
    *
    * This is the whole input to aim assist, and it is worth being precise about
