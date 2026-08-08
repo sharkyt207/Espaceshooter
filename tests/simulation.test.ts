@@ -22,6 +22,7 @@ import { GridContainer } from '../src/inventory/GridContainer';
 import { createStack, stackValue, stackWeight } from '../src/inventory/ItemStack';
 import { Inventory } from '../src/inventory/Inventory';
 import { HealthSystem } from '../src/health/HealthSystem';
+import { Player } from '../src/player/Player';
 import {
   chamberFromMagazine,
   cycleRound,
@@ -1436,5 +1437,106 @@ describe('Handling ladder', () => {
   test('the heavy classes are genuinely heavy', () => {
     assert.ok(bestOf('lmg') > worstOf('rifle'), 'an LMG must handle worse than any rifle');
     assert.ok(bestOf('sniper') > worstOf('carbine'), 'a repeater must handle worse than a carbine');
+  });
+});
+
+describe('Vaulting', () => {
+  /** Open ground with a single crate directly east of the player. */
+  const crateMap = (): TileMap => {
+    const map = new TileMap(16, 16);
+    map.tiles.fill(Tile.Floor);
+    map.tiles[8 * 16 + 9] = Tile.Crate;
+    return map;
+  };
+
+  const makePlayer = (): Player => {
+    const player = new Player(bus);
+    player.reset(8.5, 8.5, 0); // facing +x, at the crate
+    return player;
+  };
+
+  test('a crate can be crossed, and the player ends up beyond it', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    assert.ok(player.tryVault(map), 'chest-high cover should be climbable');
+    assert.ok(player.isVaulting);
+
+    // Run the move to completion.
+    for (let i = 0; i < 120 && player.isVaulting; i++) {
+      player.update(1 / 60, map, 0, 0, false);
+    }
+    assert.ok(!player.isVaulting, 'the vault should finish on its own');
+    assert.ok(player.x > 9.5, `should have landed past the crate, ended at x=${player.x}`);
+    assert.ok(Math.abs(player.y - 8.5) < 0.6, 'and not drifted sideways');
+  });
+
+  test('a full-height wall is not climbable', () => {
+    const map = crateMap();
+    map.tiles[8 * 16 + 9] = Tile.Concrete;
+    const player = makePlayer();
+    assert.equal(player.tryVault(map), false, 'a three-metre wall is not chest-high');
+  });
+
+  test('open ground offers nothing to climb', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    player.angle = Math.PI; // facing away from the crate
+    assert.equal(player.tryVault(map), false);
+  });
+
+  test('a crate with a wall behind it cannot be crossed', () => {
+    // Otherwise the landing either wedges the player inside geometry or hands
+    // them a free two-tile teleport, depending on how collision resolves it.
+    const map = crateMap();
+    map.tiles[8 * 16 + 10] = Tile.Concrete;
+    const player = makePlayer();
+    assert.equal(player.tryVault(map), false, 'there must be somewhere to land');
+  });
+
+  test('climbing costs stamina and is refused when exhausted', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    const before = player.stamina;
+    assert.ok(player.tryVault(map));
+    assert.ok(player.stamina < before, 'a vault should cost stamina');
+
+    const tired = makePlayer();
+    tired.stamina = 4;
+    assert.equal(tired.tryVault(map), false, 'an exhausted operator cannot climb');
+  });
+
+  test('a crouched operator has nothing to push off', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    player.setStance(1);
+    assert.equal(player.tryVault(map), false);
+  });
+
+  test('the eye rises over the obstacle and comes back down', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    const ground = player.eyeHeight;
+    player.tryVault(map);
+
+    let peak = 0;
+    for (let i = 0; i < 120 && player.isVaulting; i++) {
+      player.update(1 / 60, map, 0, 0, false);
+      peak = Math.max(peak, player.eyeHeight);
+    }
+    assert.ok(peak > ground + 0.2, `the eye should lift over the crate (peak ${peak}, ground ${ground})`);
+    assert.ok(
+      Math.abs(player.eyeHeight - ground) < 0.05,
+      `and settle back afterwards (ended at ${player.eyeHeight})`,
+    );
+  });
+
+  test('input is ignored while committed to the climb', () => {
+    const map = crateMap();
+    const player = makePlayer();
+    player.tryVault(map);
+    const firstX = player.x;
+    // Full reverse on the stick, which would normally back the player off.
+    player.update(1 / 60, map, 0, -1, false);
+    assert.ok(player.x > firstX, 'the climb should carry through a reversed stick');
   });
 });

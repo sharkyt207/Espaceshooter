@@ -198,6 +198,7 @@ export class HUD {
     this.adsBtn = make('ads', 'ads', 'ZIEL');
     this.reloadBtn = make('reload', 'reload', 'LADEN');
     this.stanceBtn = make('stance', 'stance', 'HALT');
+    this.jumpBtn = make('jump', 'jump', 'STEIG');
     this.interactBtn = make('interact', 'interact', 'AKTION');
     this.healBtn = make('heal', 'heal', 'MED');
     this.swapBtn = make('swap', 'swapWeapon', 'WECHS');
@@ -272,6 +273,7 @@ export class HUD {
   private adsBtn!: HTMLElement;
   private reloadBtn!: HTMLElement;
   private stanceBtn!: HTMLElement;
+  private jumpBtn!: HTMLElement;
   private interactBtn!: HTMLElement;
   private healBtn!: HTMLElement;
   private swapBtn!: HTMLElement;
@@ -291,6 +293,7 @@ export class HUD {
 
     this.input.bindTap(this.reloadBtn, 'reload');
     this.input.bindTap(this.stanceBtn, 'stance');
+    this.input.bindTap(this.jumpBtn, 'jump');
     this.input.bindTap(this.interactBtn, 'interact');
     this.input.bindTap(this.healBtn, 'heal');
     this.input.bindTap(this.swapBtn, 'swapWeapon');

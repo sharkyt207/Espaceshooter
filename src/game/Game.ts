@@ -596,6 +596,17 @@ export class Game {
   private consumeRaidActions(session: RaidSession): void {
     if (this.input.consumeAction('reload')) session.reload();
     if (this.input.consumeAction('stance')) session.player.cycleStance();
+    if (this.input.consumeAction('jump')) {
+      // Refused vaults tell the player why. A control that sometimes does
+      // nothing and never says so reads as broken input rather than as a rule.
+      if (!session.player.tryVault(session.map)) {
+        bus.emit('ui:notify', {
+          text: 'Hier ist nichts zu übersteigen',
+          tone: 'info',
+          duration: 1.4,
+        });
+      }
+    }
     if (this.input.consumeAction('interact')) this.tryInteract();
     if (this.input.consumeAction('swapWeapon')) session.swapWeapon();
     if (this.input.consumeAction('fireMode')) session.cycleFireMode();

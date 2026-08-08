@@ -4,7 +4,7 @@ import { clamp, clamp01, damp, wrapAngle } from '../core/Math2D';
 import { HealthSystem } from '../health/HealthSystem';
 import { Inventory } from '../inventory/Inventory';
 import { METERS_PER_TILE, TileMap, TILE_DEFS } from '../world/TileMap';
-import { moveCircle } from '../world/Physics';
+import { circleFits, moveCircle } from '../world/Physics';
 import type { Combatant } from '../combat/Combatant';
 import type { BodyPart } from '../data/ItemTypes';
 
@@ -58,6 +58,19 @@ const DECELERATION = 8;
  */
 const REVERSAL_DRAG = 1.7;
 
+/**
+ * Chest-high, in metres: the tallest obstacle a loaded operator will climb.
+ *
+ * Only crates qualify in this world, which is the point. A crate line is
+ * otherwise an impassable wall, so being able to cross it turns cover into a
+ * route and gives the map a second layer of flow - which is a real tactical
+ * choice, where a jump that clears nothing would be decoration.
+ */
+const VAULT_MAX_HEIGHT = 1.4;
+/** Seconds spent committed to the climb. */
+const VAULT_SECONDS = 0.72;
+const VAULT_STAMINA = 16;
+
 /** Load in kg below which there is no penalty at all. */
 const FREE_CARRY_KG = 22;
 /** Load at which the player can barely move. */
@@ -95,6 +108,22 @@ export class Player implements Combatant {
    */
   velX = 0;
   velY = 0;
+
+  /**
+   * Vault state. Non-null only while crossing an obstacle.
+   *
+   * The whole move is a scripted arc rather than physics: the player is
+   * committed the moment it starts, cannot steer, cannot shoot, and arrives
+   * where the climb was aimed. That commitment is what makes it a decision -
+   * a vault you could abort halfway would just be a faster way to walk.
+   */
+  private vault: {
+    fromX: number; fromY: number; toX: number; toY: number; t: number;
+  } | null = null;
+
+  get isVaulting(): boolean {
+    return this.vault !== null;
+  }
 
   /** Ground speed in tiles/sec, measured after collision. */
   speed = 0;
@@ -152,6 +181,49 @@ export class Player implements Combatant {
     this.stance = stance;
     this.applyStance();
     this.bus.emit('player:stanceChanged', { stance: ['liegend', 'geduckt', 'stehend'][stance] });
+  }
+
+  /**
+   * Try to climb the obstacle directly ahead.
+   *
+   * Returns false, and does nothing, whenever the move is not available - the
+   * caller can use that to play a refusal rather than leaving the player
+   * pressing a button that silently does nothing.
+   *
+   * The landing tile is checked as well as the obstacle. Vaulting into a wall
+   * would either wedge the player inside geometry or hand them a free teleport
+   * past two tiles, depending on how the collision resolved it.
+   */
+  tryVault(map: TileMap): boolean {
+    if (this.vault || this.isBusy) return false;
+    // Standing only: a crouched or prone operator has nothing to push off.
+    if (this.stance !== 2) return false;
+    if (this.stamina < VAULT_STAMINA || this.staminaLockout > 0) return false;
+    if (this.overloaded) return false;
+
+    const cos = Math.cos(this.angle);
+    const sin = Math.sin(this.angle);
+    const obstacleX = Math.floor(this.x + cos * 0.75);
+    const obstacleY = Math.floor(this.y + sin * 0.75);
+    if (!map.inBounds(obstacleX, obstacleY)) return false;
+
+    const def = TILE_DEFS[map.tiles[obstacleY * map.width + obstacleX]];
+    if (!def.wall || def.height > VAULT_MAX_HEIGHT) return false;
+
+    // Land one tile beyond the obstacle, centred, and only if that is open.
+    const landX = obstacleX + 0.5 + cos * 1.0;
+    const landY = obstacleY + 0.5 + sin * 1.0;
+    if (!circleFits(map, landX, landY, this.radius)) return false;
+
+    this.vault = { fromX: this.x, fromY: this.y, toX: landX, toY: landY, t: 0 };
+    this.velX = 0;
+    this.velY = 0;
+    this.stamina = Math.max(0, this.stamina - VAULT_STAMINA);
+    this.bus.emit('sound:emit', {
+      x: this.x, y: this.y, radius: 9, intensity: 0.5,
+      kind: 'footstep', sourceId: this.id,
+    });
+    return true;
   }
 
   cycleStance(): void {
@@ -276,6 +348,30 @@ export class Player implements Combatant {
       if (Math.abs(moveX / inputMag) > 0.7) directionScale *= 0.82;
     }
     speed *= directionScale;
+
+    // --- vault ---------------------------------------------------------------
+    //
+    // Runs before anything else and returns early: while climbing, the input
+    // is ignored entirely and the position is driven by the arc.
+    if (this.vault) {
+      this.vault.t += dt / VAULT_SECONDS;
+      const t = clamp01(this.vault.t);
+      // Ease out of the push and into the landing, so the middle of the move
+      // is the fastest part rather than the ends.
+      const eased = t * t * (3 - 2 * t);
+      this.x = this.vault.fromX + (this.vault.toX - this.vault.fromX) * eased;
+      this.y = this.vault.fromY + (this.vault.toY - this.vault.fromY) * eased;
+      // A half-sine lifts the eye over the obstacle and sets it down again.
+      const lift = Math.sin(t * Math.PI) * 0.55;
+      this.eyeHeight = EYE_HEIGHT_BY_STANCE[2] + lift;
+      this.speed = 0;
+      if (t >= 1) {
+        this.vault = null;
+        this.eyeHeight = EYE_HEIGHT_BY_STANCE[this.stance];
+      }
+      this.updateStamina(dt, false, mods.staminaDrain, mods.staminaRegen);
+      return;
+    }
 
     // --- velocity ----------------------------------------------------------
     //
