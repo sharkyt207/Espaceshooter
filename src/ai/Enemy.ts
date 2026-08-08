@@ -517,7 +517,7 @@ export class Enemy implements Combatant {
         if (flank) {
           const point = this.flankPosition(ctx, a.lastKnownX, a.lastKnownY);
           if (point && this.requestPathTo(ctx, point.x, point.y)) {
-            this.enterState('reposition', 6);
+            this.enterState('reposition', 6, true);
             return;
           }
         }
@@ -539,7 +539,7 @@ export class Enemy implements Combatant {
     if (dist > preferredRange * 1.6 && this.rng.chance(this.profile.aggression * 0.5)) {
       const approach = this.approachPosition(ctx, ctx.target.x, ctx.target.y, preferredRange);
       if (approach && this.requestPathTo(ctx, approach.x, approach.y)) {
-        this.enterState('reposition', 4);
+        this.enterState('reposition', 4, true);
         return;
       }
     }
@@ -548,7 +548,7 @@ export class Enemy implements Combatant {
     if (dist < preferredRange * 0.35 && this.rng.chance(0.4)) {
       const away = this.retreatPosition(ctx, ctx.target.x, ctx.target.y, preferredRange * 0.8);
       if (away && this.requestPathTo(ctx, away.x, away.y)) {
-        this.enterState('reposition', 3);
+        this.enterState('reposition', 3, true);
         return;
       }
     }
@@ -570,9 +570,30 @@ export class Enemy implements Combatant {
     else this.enterState('engage');
   }
 
-  private enterState(state: AIState, timer = 0): void {
+  /**
+   * Switch state.
+   *
+   * `keepPath` exists because of a bug worth remembering. This used to clear
+   * the path unconditionally, and four callers do exactly this:
+   *
+   *     if (this.requestPathTo(ctx, x, y)) this.enterState('reposition', 4);
+   *
+   * - compute somewhere to go, then throw the route away one line later. The
+   * effect was that `reposition` was entered with an empty path, its exit
+   * condition (`pathIndex >= path.length`) was true on the very next think
+   * tick, and the AI dropped straight back to `engage` without having moved.
+   *
+   * Every movement decision the AI made was discarded: it never took cover,
+   * never flanked, never pushed and never fell back. It stood in the open and
+   * shot, for the whole fight, which reads as a very confident enemy and is
+   * actually a completely inert one.
+   *
+   * Clearing is still the right default - most transitions do mean "stop what
+   * you were walking towards" - so the exception is opt-in and named.
+   */
+  private enterState(state: AIState, timer = 0, keepPath = false): void {
     this.state = state;
-    this.clearPath();
+    if (!keepPath) this.clearPath();
     switch (state) {
       case 'investigate':
         this.stateTimer = timer || 18;
@@ -629,7 +650,7 @@ export class Enemy implements Combatant {
     const spot = this.findCoverPosition(ctx, threatX, threatY, wantLineOfSight);
     if (!spot) return false;
     if (!this.requestPathTo(ctx, spot.x, spot.y)) return false;
-    this.enterState('reposition', 4);
+    this.enterState('reposition', 4, true);
     return true;
   }
 

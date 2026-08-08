@@ -44,6 +44,9 @@ import {
   WEATHER_PROFILES,
 } from '../src/world/Conditions';
 import { AI_PROFILES } from '../src/ai/AIProfiles';
+import { Enemy } from '../src/ai/Enemy';
+import { BallisticsSystem } from '../src/combat/Ballistics';
+import { EffectSystem } from '../src/render/Effects';
 import { createAwareness, updateVision, type PerceptionInput } from '../src/ai/Perception';
 import type { Combatant } from '../src/combat/Combatant';
 
@@ -1712,5 +1715,168 @@ describe('Risk and reward', () => {
           `(hot ${hotDensity.toFixed(5)}/tile, calm ${calmDensity.toFixed(5)}/tile)`,
       );
     }
+  });
+});
+
+describe('AI behaviour', () => {
+  /**
+   * Does the AI actually fight, or does it walk at you in a straight line?
+   *
+   * The state machine has seven states and the code references cover thirty
+   * times, but none of that proves anything about behaviour - a machine can
+   * have a `reposition` state it never usefully enters. These drive a real
+   * enemy against a real map and measure what it does.
+   *
+   * A corridor with pillars down both sides: a straight charge is available
+   * and so is a covered approach, so the choice is the AI's to get wrong.
+   */
+  const arena = (): TileMap => {
+    const map = new TileMap(40, 24);
+    map.tiles.fill(Tile.Floor);
+    // Walls around the outside.
+    for (let x = 0; x < 40; x++) {
+      map.tiles[x] = Tile.Concrete;
+      map.tiles[23 * 40 + x] = Tile.Concrete;
+    }
+    for (let y = 0; y < 24; y++) {
+      map.tiles[y * 40] = Tile.Concrete;
+      map.tiles[y * 40 + 39] = Tile.Concrete;
+    }
+    // Pillars off the centre line, leaving a clear straight run down the middle.
+    for (let x = 8; x < 34; x += 5) {
+      for (const y of [8, 15]) {
+        map.tiles[y * 40 + x] = Tile.Concrete;
+        map.tiles[y * 40 + x + 1] = Tile.Concrete;
+      }
+    }
+    map.lightmap.fill(210); // broad daylight, so nothing is hidden
+    return map;
+  };
+
+  const runFight = (seconds: number, tier: 'scavenger' | 'guard' | 'contractor') => {
+    const map = arena();
+    const nav = new NavGrid(map);
+    const cover = new CoverMap(map);
+    const effects = new EffectSystem(64, 64);
+    const ballistics = new BallisticsSystem(bus, effects, 99);
+
+    // Only the fields the AI reads. Cast through `unknown` because a real
+    // `Combatant` also carries health and inventory, and neither is consulted
+    // on the perception path being measured here.
+    const target = {
+      id: 1, isPlayer: true, name: 'Ziel',
+      x: 4.5, y: 11.5, angle: 0, pitch: 0,
+      radius: 0.28, height: 1.8, eyeHeight: 1.62,
+      alive: true,
+    } as unknown as Combatant;
+
+    const enemy = new Enemy(bus, ballistics, tier, 7);
+    // 22 tiles apart. This has to sit inside the tier's sight range or the
+    // test measures an enemy that never noticed anything - which is exactly
+    // the false negative that cost me an afternoon at 31 tiles.
+    enemy.spawn(26.5, 11.5, Math.PI); // dead ahead of the target, facing it
+
+    const path: { x: number; y: number }[] = [];
+
+    const ctx = {
+      map, nav, cover, target,
+      targetSpeed: 0, targetStance: 2, targetGlow: 0, sightScale: 1,
+      requestPath: (sx: number, sy: number, tx: number, ty: number) =>
+        nav.findPath(sx, sy, tx, ty).points ?? null,
+      squadEngaged: false,
+      alertSquad: () => {},
+      elapsed: 0,
+    };
+
+    const dt = 1 / 30;
+    for (let i = 0; i < seconds * 30; i++) {
+      ctx.elapsed = i * dt;
+      enemy.update(dt, ctx as never);
+      path.push({ x: enemy.x, y: enemy.y });
+    }
+    return { enemy, path, cover, map };
+  };
+
+  test('an alerted enemy does not simply walk down the middle at you', () => {
+    // The specific failure the brief names: "NPC sieht Spieler, rennt geradeaus
+    // auf Spieler zu". The straight line here is y = 11.5, and taking it means
+    // crossing the whole arena in the open.
+    const { path } = runFight(14, 'guard');
+    const deviation = Math.max(...path.map((p) => Math.abs(p.y - 11.5)));
+    assert.ok(
+      deviation > 0.9,
+      `the enemy stayed within ${deviation.toFixed(2)} tiles of the straight ` +
+        `line to the target - that is a charge, not a fight`,
+    );
+  });
+
+  test('it closes the distance rather than milling about', () => {
+    const { path } = runFight(14, 'guard');
+    const start = path[0].x;
+    const end = path[path.length - 1].x;
+    assert.ok(end < start - 2, `should have advanced (from x=${start} to x=${end})`);
+  });
+
+  test('it ends up somewhere sheltered rather than in the open', () => {
+    const { path, cover, map } = runFight(14, 'contractor');
+    // Average shelter over the second half of the fight, against the arena's
+    // own average - a fair comparison, since this map is mostly open by design.
+    const half = path.slice(Math.floor(path.length / 2));
+    const shelterAt = (x: number, y: number): number =>
+      cover.score[Math.floor(y) * map.width + Math.floor(x)] ?? 0;
+    const taken = half.reduce((sum, p) => sum + shelterAt(p.x, p.y), 0) / half.length;
+
+    let total = 0;
+    let count = 0;
+    for (let y = 1; y < 23; y++) {
+      for (let x = 1; x < 39; x++) {
+        if (map.isSolid(x, y)) continue;
+        total += cover.score[y * map.width + x];
+        count++;
+      }
+    }
+    const average = total / count;
+    assert.ok(
+      taken > average,
+      `the enemy should prefer sheltered ground (took ${taken.toFixed(1)}, arena average ${average.toFixed(1)})`,
+    );
+  });
+
+  test('it engages rather than staring', () => {
+    const { enemy } = runFight(14, 'guard');
+    assert.notEqual(enemy.state, 'idle', 'a guard with a clear view should not still be idle');
+    assert.notEqual(enemy.state, 'patrol', 'nor still be patrolling');
+  });
+
+  test('a scavenger breaks off when badly hurt', () => {
+    const map = arena();
+    const nav = new NavGrid(map);
+    const cover = new CoverMap(map);
+    const effects = new EffectSystem(64, 64);
+    const ballistics = new BallisticsSystem(bus, effects, 99);
+    const target = {
+      id: 1, isPlayer: true, name: 'Ziel', x: 4.5, y: 11.5, angle: 0, pitch: 0,
+      radius: 0.28, height: 1.8, eyeHeight: 1.62, alive: true,
+    } as unknown as Combatant;
+
+    const enemy = new Enemy(bus, ballistics, 'scavenger', 3);
+    enemy.spawn(20.5, 11.5, Math.PI);
+    const ctx = {
+      map, nav, cover, target, targetSpeed: 0, targetStance: 2, targetGlow: 0,
+      sightScale: 1,
+      requestPath: (sx: number, sy: number, tx: number, ty: number) =>
+        nav.findPath(sx, sy, tx, ty).points ?? null,
+      squadEngaged: false, alertSquad: () => {}, elapsed: 0,
+    };
+
+    // Let it notice the target, then wound it badly.
+    for (let i = 0; i < 90; i++) enemy.update(1 / 30, ctx as never);
+    for (const part of Object.values(enemy.health.parts)) part.hp = part.max * 0.12;
+    for (let i = 0; i < 120; i++) {
+      ctx.elapsed = (90 + i) / 30;
+      enemy.update(1 / 30, ctx as never);
+    }
+
+    assert.equal(enemy.state, 'flee', `a badly wounded scavenger should break off, was ${enemy.state}`);
   });
 });
