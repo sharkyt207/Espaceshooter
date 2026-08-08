@@ -19,9 +19,13 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     displayName: 'Hafenbecken 7',
     width: 96,
     height: 96,
-    buildings: 5,
-    containerYards: 3,
-    clutter: 0.9,
+    buildings: 4,
+    containerYards: 2,
+    // A working dock: a few large sheds and a lot of bare concrete. Sightlines
+    // run long, so crossing the open is the decision this map asks, and a
+    // rifle earns its weight here.
+    clutter: 0.25,
+    structureScale: 1.25,
     water: true,
     ambient: 0.66,
     raidSeconds: 25 * 60,
@@ -36,7 +40,10 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     height: 78,
     buildings: 4,
     containerYards: 4,
+    // The middle ground, and the one that should read as ordinary: mixed
+    // ranges, neither a shooting gallery nor a knife fight.
     clutter: 1.1,
+    structureScale: 1,
     water: false,
     ambient: 0.52,
     raidSeconds: 18 * 60,
@@ -49,9 +56,13 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     displayName: 'Kesselhaus West',
     width: 66,
     height: 66,
-    buildings: 3,
-    containerYards: 2,
-    clutter: 0.7,
+    buildings: 9,
+    containerYards: 6,
+    // A boiler house packed into its plot: many small structures, heavy debris
+    // between them, corners everywhere. Short weapons and sound discipline win
+    // here, and a scope is dead weight.
+    clutter: 3.2,
+    structureScale: 0.8,
     water: false,
     ambient: 0.38,
     raidSeconds: 14 * 60,

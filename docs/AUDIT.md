@@ -104,6 +104,39 @@ Sie fächern von 2 auf 12 Kacheln auf, nehmen unterschiedliche Wege, zwei von
 drei enden auf Deckungsfeldern (Deckungswert 120 und 60), einer umgeht weit über
 die Flanke. Kein Stapeln, keine gemeinsame Linie.
 
+### Orte, die sich unterscheiden
+
+Die drei Karten unterschieden sich **untereinander so wenig wie zwei Seeds
+derselben Karte**: 25,8–29,2 % feste Fläche, mittlere Sichtweite 8,3–10,8 —
+und fünf Seeds einer einzigen Karte spannten 8,9–10,8. Nichts war
+wiedererkennbar. Ein vierter Bauplan hätte nur eine vierte austauschbare Karte
+ergeben, deshalb kam vor dem Nachlegen die Messung.
+
+Gemessen wird die **mittlere freie Sichtlinie im Freien** — die Zahl, die ein
+Spieler fühlt, ohne sie benennen zu können: sie entscheidet, ob ein Zielfernrohr
+sein Gewicht wert ist und ob das Überqueren offener Fläche eine Entscheidung
+ist oder ein Spaziergang.
+
+| Ort | Sicht draußen | über 5 Seeds |
+|---|---|---|
+| Hafenbecken 7 | 14,1 | 12,3 – 15,1 |
+| Umschlagdepot | 7,5 | 6,9 – 8,2 |
+| Kesselhaus West | 4,7 | 4,6 – 5,0 |
+
+Entscheidend ist die dritte Spalte: **die Seed-Streuung überlappt nicht mehr
+mit dem Abstand zwischen den Orten.** Ein Ort ist jetzt unabhängig vom Seed
+wiedererkennbar, und genau das war vorher nicht so.
+
+Der wirksame Hebel ist `clutter` (11,1 → 4,6 über seinen Bereich). Ich hatte
+zuerst einen `structureSpacing`-Parameter eingebaut, in der Annahme, der Abstand
+zwischen Strukturen sei ausschlaggebend — gemessen bewegte er die Zahl von 7,3
+auf 8,3 über den Bereich 2 bis 12 Kacheln. Vierzehn Prozent für einen Regler,
+der aussieht, als forme er die Karte um. Er ist wieder draußen.
+
+---
+
+## Gegner (Fortsetzung)
+
 Vier Stufen: Streuner, Wache, Söldner, Kommandant. Sichtweiten 22/28/34/40
 Kacheln. Trupps teilen Kontakte, aber schwächer als eine eigene Sichtung — man
 läuft dorthin, wo der Partner ruft, man bekommt nicht seine Augen.
@@ -182,7 +215,7 @@ für das Compositing etwa 100 ms je Bild.
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
 | Karten | 3 (96², 78², 66²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 149 |
+| Simulationstests | 151 |
 
 ---
 
@@ -190,7 +223,7 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 149 Simulationstests, ohne Browser |
+| `npm test` | 151 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
 | `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |
@@ -213,9 +246,10 @@ Ehrlich, und nach Gewicht sortiert.
    verifizieren ließe, und ungetesteten Portcode zu schreiben hieße, Arbeit zu
    liefern, die niemand geprüft hat.
 
-2. **Drei Karten sind für eine Extraktions-Schleife wenig.** Der Generator
-   erzeugt sie prozedural aus Bauplänen, das Nachlegen ist billig — aber
-   Wiedererkennbarkeit entsteht aus Handarbeit, und die fehlt.
+2. **Drei Karten sind für eine Extraktions-Schleife wenig.** Sie unterscheiden
+   sich seit diesem Durchgang aber wenigstens *spürbar* voneinander (siehe
+   unten); vorher taten sie das nicht. Weitere Orte sind jetzt billig, weil der
+   Bauplan tatsächlich Charakter steuert statt nur Größe.
 
 3. **Die Prüfumgebung hat keine echte GPU.** Alle Grafikaussagen stammen von
    SwiftShader. Struktur und Übereinstimmung der Renderer sind damit belegt,

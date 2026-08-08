@@ -1142,6 +1142,110 @@ describe('WorldMesh', () => {
   });
 });
 
+describe('Locations feel different', () => {
+  /**
+   * Mean unobstructed outdoor sightline, in tiles.
+   *
+   * This is the number a player feels without being able to name it: how far
+   * they can see before something blocks it, which decides whether a scope is
+   * worth carrying and whether crossing open ground is a decision or a stroll.
+   * Sampled on a coarse grid along the four axes, outdoors only - indoor
+   * sightlines are short everywhere and would wash the signal out.
+   */
+  const outdoorSightline = (bp: (typeof MAP_BLUEPRINTS)[number], seed: number): number => {
+    const map = generateMap(bp, seed).map;
+    let total = 0;
+    let samples = 0;
+    for (let y = 2; y < map.height - 2; y += 3) {
+      for (let x = 2; x < map.width - 2; x += 3) {
+        const i = y * map.width + x;
+        if (map.tiles[i] !== Tile.Floor || map.ceiling[i]) continue;
+        for (const [dx, dy] of [[1, 0], [0, 1], [-1, 0], [0, -1]] as const) {
+          let d = 0;
+          while (d < 80) {
+            const nx = x + dx * (d + 1);
+            const ny = y + dy * (d + 1);
+            if (nx < 0 || ny < 0 || nx >= map.width || ny >= map.height) break;
+            if (map.tiles[ny * map.width + nx] !== Tile.Floor) break;
+            d++;
+          }
+          total += d;
+          samples++;
+        }
+      }
+    }
+    return total / Math.max(1, samples);
+  };
+
+  const range = (id: string) => {
+    const bp = MAP_BLUEPRINTS.find((b) => b.id === id)!;
+    const values = [1, 2, 3, 4, 5].map((seed) => outdoorSightline(bp, seed));
+    return { min: Math.min(...values), max: Math.max(...values) };
+  };
+
+  test('each location has its own character, and the seed does not erase it', () => {
+    // The bug this pins down: three "different locations" used to measure
+    // 8.3, 8.7 and 10.8 tiles, while five seeds of a single one spanned
+    // 8.9 to 10.8. The spread within a location was as large as the gap
+    // between locations, so nothing was recognisable - a fourth entry in the
+    // table would only have produced a fourth interchangeable map.
+    //
+    // What separates them is `clutter`. Measured across its usable range it
+    // moves this number from 11.1 down to 4.6; structure spacing, which I
+    // added first on the assumption it would dominate, moved it from 7.3 to
+    // 8.3 and was removed again.
+    const harbour = range('harbour');
+    const depot = range('depot');
+    const works = range('works');
+
+    // Ordered: an open dock, a mixed depot, a packed boiler house.
+    assert.ok(
+      works.max < depot.min,
+      `the works should be tighter than the depot on every seed ` +
+        `(works up to ${works.max.toFixed(1)}, depot from ${depot.min.toFixed(1)})`,
+    );
+    assert.ok(
+      depot.max < harbour.min,
+      `the depot should be tighter than the harbour on every seed ` +
+        `(depot up to ${depot.max.toFixed(1)}, harbour from ${harbour.min.toFixed(1)})`,
+    );
+
+    // And the difference has to be worth feeling, not a rounding error.
+    assert.ok(
+      harbour.min > works.max * 2,
+      `the open location should see at least twice as far as the tight one ` +
+        `(harbour from ${harbour.min.toFixed(1)}, works up to ${works.max.toFixed(1)})`,
+    );
+  });
+
+  test('every location still has room to fight in', () => {
+    // The counterweight. Driving clutter up to make a place feel tight is easy
+    // and would eventually produce a map that is impassable rather than
+    // claustrophobic, so this holds the floor.
+    for (const bp of MAP_BLUEPRINTS) {
+      const generated = generateMap(bp, 3);
+      const map = generated.map;
+      let floor = 0;
+      for (let i = 0; i < map.width * map.height; i++) {
+        if (map.tiles[i] === Tile.Floor) floor++;
+      }
+      const walkable = floor / (map.width * map.height);
+      assert.ok(
+        walkable > 0.55,
+        `${bp.id} is only ${(walkable * 100).toFixed(0)} % walkable - too solid to move through`,
+      );
+      assert.ok(
+        generated.lootAnchors.length >= 20,
+        `${bp.id} has only ${generated.lootAnchors.length} loot anchors - not worth the trip`,
+      );
+      assert.ok(
+        generated.extracts.length >= 2,
+        `${bp.id} must offer a choice of exit, has ${generated.extracts.length}`,
+      );
+    }
+  });
+});
+
 describe('Ammunition choice', () => {
   // The gun used to pick the highest-penetration round in the bag, always, and
   // the player had no way to say otherwise. That auto-pick is frequently the
