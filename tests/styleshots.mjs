@@ -29,7 +29,7 @@ const URL = argOf('--url', 'http://127.0.0.1:4173/');
 const OUT = argOf('--out', './dist/styles');
 const EXECUTABLE = process.env.CHROMIUM_PATH || undefined;
 
-const STYLES = ['feldbericht', 'signal', 'archiv'];
+const STYLES = ['comic', 'futuristisch', 'realistisch'];
 
 /** Fixed pose for the raid frame, so the three are directly comparable. */
 const POSE = { angle: 0.2, pitch: -0.04 };

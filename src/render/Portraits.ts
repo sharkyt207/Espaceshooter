@@ -989,6 +989,17 @@ function applyTreatment(
       data[i + 2] = (data[i + 2] - 128) * style.contrast + 128;
     }
 
+    // Flatten to steps, for the drawn direction. After the tint and the
+    // contrast, so what gets quantised is the finished colour rather than the
+    // raw shading - otherwise the steps land in different places on each
+    // character and they stop looking drawn by the same hand.
+    if (style.posterize > 0) {
+      const n = style.posterize;
+      data[i] = Math.round((data[i] / 255) * n) / n * 255;
+      data[i + 1] = Math.round((data[i + 1] / 255) * n) / n * 255;
+      data[i + 2] = Math.round((data[i + 2] / 255) * n) / n * 255;
+    }
+
     // Grain, stronger in the mid-tones where a sensor is actually noisiest.
     const grain = (rng() - 0.5) * style.grain * (0.35 + (1 - Math.abs(lum - 0.5) * 2) * 0.65);
     data[i] += grain;
@@ -996,6 +1007,35 @@ function applyTreatment(
     data[i + 2] += grain;
   }
   ctx.putImageData(image, 0, 0);
+
+  // A drawn contour. Only the boundary between the figure and the background
+  // is inked, found by looking for a large luminance step - the interior lines
+  // of the face are already carried by the drawing underneath, and inking
+  // those too turns a portrait into a woodcut.
+  if (style.ink > 0) {
+    const src = ctx.getImageData(0, 0, w, h);
+    const sd = src.data;
+    const lumAt = (x: number, y: number): number => {
+      const i = (y * w + x) * 4;
+      return sd[i] * 0.299 + sd[i + 1] * 0.587 + sd[i + 2] * 0.114;
+    };
+    const out = ctx.createImageData(w, h);
+    out.data.set(sd);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const g =
+          Math.abs(lumAt(x + 1, y) - lumAt(x - 1, y)) +
+          Math.abs(lumAt(x, y + 1) - lumAt(x, y - 1));
+        if (g < 34) continue;
+        const strength = Math.min(1, (g - 34) / 70) * style.ink;
+        const i = (y * w + x) * 4;
+        out.data[i] = sd[i] * (1 - strength);
+        out.data[i + 1] = sd[i + 1] * (1 - strength);
+        out.data[i + 2] = sd[i + 2] * (1 - strength);
+      }
+    }
+    ctx.putImageData(out, 0, 0);
+  }
 
   // Scanlines: every third row. Enough to read as a screen capture at low
   // strength, a deliberate artefact at high.

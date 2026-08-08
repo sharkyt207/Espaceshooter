@@ -1142,12 +1142,16 @@ describe('Style', () => {
       for (const [label, v] of [
         ['grain', g.grain], ['vignette', g.vignette],
         ['aberration', g.aberration], ['scanlines', g.scanlines],
-        ['bloom', g.bloomStrength],
+        ['bloom', g.bloomStrength], ['outline', g.outline],
+        ['halftone', g.halftone],
       ] as const) {
         assert.ok(v >= 0 && v <= 2, `${id} has an implausible ${label} of ${v}`);
       }
       assert.equal(g.shadowTint.length, 3);
       assert.equal(g.highlightTint.length, 3);
+      assert.equal(g.outlineColor.length, 3);
+      assert.ok(g.celBands >= 0 && g.celBands <= 16, `${id} has ${g.celBands} cel bands`);
+      assert.ok(g.outlineWidth > 0, `${id} needs a positive outline width`);
     }
   });
 
@@ -1190,6 +1194,7 @@ describe('Style', () => {
       const g = STYLES[id].grade;
       const fingerprint = [
         g.saturation, g.contrast, g.grain, g.aberration, g.scanlines,
+        g.celBands, g.outline, g.halftone, g.posterize,
         ...g.shadowTint, ...g.highlightTint,
       ].join(',');
       assert.ok(!seen.has(fingerprint), `${id} has the same grade as another style`);
@@ -1210,6 +1215,6 @@ describe('Style', () => {
     // that no longer exists.
     assert.equal(styleById('does-not-exist').id, DEFAULT_STYLE);
     assert.equal(styleById('').id, DEFAULT_STYLE);
-    assert.equal(styleById('signal').id, 'signal');
+    assert.equal(styleById('comic').id, 'comic');
   });
 });

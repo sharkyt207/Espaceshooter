@@ -96,6 +96,11 @@ uniform vec2 uMapSize;
 uniform vec3 uSunDir;
 uniform float uSunAmount;
 
+/** Bands to quantise the lighting into. 0 leaves it continuous. */
+uniform float uCelBands;
+/** Floor under the lowest band, so shadows are dark rather than empty. */
+uniform float uCelFloor;
+
 uniform vec3 uCamPos;
 uniform vec3 uCamForward;
 
@@ -189,6 +194,26 @@ void main() {
   float light =
     (baked * directional * ambientOcclusion + (torch + flash) * directOcclusion) *
     uExposure * vFaceShade;
+
+  // --- cel banding --------------------------------------------------------
+  //
+  // Quantising here rather than in the composite is the whole trick. Light is
+  // banded before it multiplies the texture, so the steps fall on the *form* -
+  // the terminator wrapping around a crate, the edge of the torch cone - and
+  // the material underneath keeps all of its detail. Posterising the finished
+  // image instead bands the albedo too, and the result reads as a colour
+  // reduction rather than as drawn shading.
+  //
+  // The band edges are softened by roughly one pixel's worth of gradient, so
+  // they alias no worse than the geometry does.
+  if (uCelBands > 0.0) {
+    float scaled = light * uCelBands;
+    float lower = floor(scaled);
+    float frac = scaled - lower;
+    float w = fwidth(scaled) * 0.5;
+    light = (lower + smoothstep(0.5 - w, 0.5 + w, frac)) / uCelBands;
+    light = uCelFloor + light * (1.0 - uCelFloor);
+  }
 
   vec3 color = texel.rgb * light;
 
@@ -433,7 +458,32 @@ uniform float uContrast;
 uniform float uAberration;
 uniform float uScanlines;
 
+/** Depth buffer of the scene, for finding silhouettes. */
+uniform sampler2D uDepth;
+uniform float uOutline;
+uniform float uOutlineWidth;
+uniform vec3 uOutlineColor;
+uniform float uHalftone;
+uniform float uPosterize;
+/** Scene target size in pixels, so screen-space effects can step by texel. */
+uniform vec2 uResolution;
+
 out vec4 fragColor;
+
+/**
+ * Depth, linearised.
+ *
+ * The buffer holds a non-linear value - almost all of its precision sits close
+ * to the near plane - so a fixed threshold on the raw number would find every
+ * edge at arm's length and none at all across a courtyard. Converting back to
+ * view-space distance first makes one threshold work at every range.
+ */
+float linearDepth(vec2 uv) {
+  float z = texture(uDepth, uv).r * 2.0 - 1.0;
+  const float near = 0.02;
+  const float far = 240.0;
+  return (2.0 * near * far) / (far + near - z * (far - near));
+}
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -520,6 +570,57 @@ void main() {
   // Grain, strongest in the mid-tones where a sensor is actually noisiest.
   float grain = (hash21(vUv * 1024.0 + uTime) - 0.5);
   color += grain * uGrain * (0.35 + (1.0 - abs(lum - 0.5) * 2.0) * 0.65);
+
+  // --- ink ----------------------------------------------------------------
+  //
+  // A silhouette is a place where depth jumps. Four taps in a cross, and the
+  // line is drawn where the largest jump exceeds a threshold that scales with
+  // the distance itself - without that scaling, a far wall's own slope reads
+  // as an edge and the whole background fills in solid.
+  if (uOutline > 0.0) {
+    vec2 texel = uOutlineWidth / uResolution;
+    float centre = linearDepth(vUv);
+    float l = linearDepth(vUv - vec2(texel.x, 0.0));
+    float r = linearDepth(vUv + vec2(texel.x, 0.0));
+    float u = linearDepth(vUv - vec2(0.0, texel.y));
+    float dn = linearDepth(vUv + vec2(0.0, texel.y));
+
+    // The *second* difference, not the first.
+    //
+    // A first difference measures slope, and a floor seen at a grazing angle
+    // has an enormous slope - the ground would ink up solid while an actual
+    // silhouette three metres away went unmarked. On any flat surface, however
+    // steeply it recedes, the centre sample sits halfway between its two
+    // neighbours; only a real discontinuity breaks that. Measuring how far the
+    // centre departs from that midpoint is therefore blind to slope and sees
+    // only breaks, which is exactly what a silhouette is.
+    float d = abs(l + r - 2.0 * centre) + abs(u + dn - 2.0 * centre);
+
+    // Proportional to distance: an edge is a break of a fraction of a percent
+    // of how far away the surface is, not a fixed number of metres.
+    float edge = smoothstep(0.004, 0.02, d / max(centre, 0.5));
+    color = mix(color, uOutlineColor, edge * uOutline);
+  }
+
+  // --- halftone -----------------------------------------------------------
+  //
+  // Ben-day dots, and only in the shadows, which is where a printer actually
+  // used them: the lit side of a panel is solid ink and the shaded side is a
+  // screen of dots. Rotated off-axis so the grid does not line up with the
+  // pixel rows and moire.
+  if (uHalftone > 0.0) {
+    float lum2 = dot(color, vec3(0.299, 0.587, 0.114));
+    vec2 rotated = mat2(0.87, -0.5, 0.5, 0.87) * (vUv * uResolution);
+    vec2 cell = fract(rotated / 5.0) - 0.5;
+    // Dot radius grows as the pixel darkens - that is what carries the tone.
+    float dot1 = smoothstep(0.42, 0.18, length(cell) - (1.0 - lum2) * 0.30);
+    color = mix(color, color * 0.55, dot1 * uHalftone * (1.0 - smoothstep(0.25, 0.65, lum2)));
+  }
+
+  // --- posterise ----------------------------------------------------------
+  if (uPosterize > 0.0) {
+    color = floor(color * uPosterize + 0.5) / uPosterize;
+  }
 
   // Full-screen state overlays - damage red, exhaustion dark.
   color = mix(color, uOverlay.rgb, uOverlay.a);

@@ -1721,68 +1721,68 @@ html, body {
    Almost all of a style is carried by the custom properties, because every
    screen is already written against them. What lives here is the handful of
    things a colour cannot say: whether a panel has weight behind it, whether
-   the interface is pretending to be printed, whether corners are soft.
+   the interface is drawn or photographed, how hard the corners are.
 
    Scoped on the `data-style` attribute that `applyStyleToDocument` sets, so
    adding a style means adding a block here and nothing else. */
 
-/* Signal: panels sit above the background rather than being cut out of it,
-   and the accent carries a faint glow. This is the direction built to be read
-   at arm's length in daylight, where flat-on-flat loses. */
-[data-style='signal'] .panel,
-[data-style='signal'] .card {
+/* Comic: everything is drawn, so everything has a line around it and sits on
+   a hard drop shadow rather than a soft one. The offset shadow with no blur is
+   the single most characteristic thing here - it is how a printed panel is
+   separated from the page, and a blurred one would immediately read as a
+   normal interface with bright colours. */
+[data-style='comic'] .panel,
+[data-style='comic'] .card,
+[data-style='comic'] .list-row {
+  border-width: 2px;
   box-shadow: var(--chrome-glow);
 }
 
-[data-style='signal'] .btn.primary {
-  box-shadow: 0 0 12px rgba(53, 200, 216, 0.28);
+[data-style='comic'] .btn {
+  border-width: 2px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: 0 3px 0 rgba(11, 12, 18, 0.85);
 }
 
-[data-style='signal'] .panel-head {
-  background: linear-gradient(180deg, rgba(53, 200, 216, 0.09), transparent);
+[data-style='comic'] .btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(11, 12, 18, 0.85);
 }
 
-/* Archiv: printed matter. Hard corners come from --radius, but the rules and
-   the letter-spacing are what actually make it read as a document rather than
-   as an interface with the corners turned off. */
-[data-style='archiv'] .panel-head {
-  border-bottom: 2px solid var(--line-bright);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+[data-style='comic'] .panel-head {
+  border-bottom-width: 2px;
+  font-weight: 700;
 }
 
-[data-style='archiv'] .section-label {
-  letter-spacing: 0.2em;
+[data-style='comic'] .title,
+[data-style='comic'] h1,
+[data-style='comic'] h2,
+[data-style='comic'] h3 {
+  font-weight: 700;
 }
 
-[data-style='archiv'] .btn {
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
+/* Futuristisch: panels are lit from within rather than drawn. A hairline in
+   the accent colour plus a soft cast below, and a gradient wash on every
+   header so the chrome looks like a surface with a light behind it. */
+[data-style='futuristisch'] .panel,
+[data-style='futuristisch'] .card {
+  box-shadow: var(--chrome-glow);
 }
 
-/* A very faint horizontal rule pattern across every panel, matching the
-   scanlines the raid gets in this style. Two pixels on, two off, at four
-   percent - visible as texture, never as stripes. */
-[data-style='archiv'] .panel::after,
-[data-style='archiv'] .card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0.04) 0px,
-    rgba(0, 0, 0, 0.04) 1px,
-    transparent 1px,
-    transparent 3px
-  );
+[data-style='futuristisch'] .btn.primary {
+  box-shadow: 0 0 14px rgba(58, 216, 232, 0.35);
 }
 
-[data-style='archiv'] .panel,
-[data-style='archiv'] .card {
-  position: relative;
+[data-style='futuristisch'] .panel-head {
+  background: linear-gradient(180deg, rgba(58, 216, 232, 0.11), transparent);
+  letter-spacing: 0.1em;
 }
 
-/* Feldbericht: nothing. The absence is the position - no glow, no texture, no
-   letter-spacing. Listed explicitly so the next person does not assume it was
-   forgotten. */
+[data-style='futuristisch'] .nav-item.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Realistisch: nothing. The absence is the position - no glow, no line weight,
+   no letter-spacing. Listed explicitly so the next person does not assume it
+   was forgotten. */

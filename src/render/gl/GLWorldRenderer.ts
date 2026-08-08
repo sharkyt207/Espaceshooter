@@ -116,7 +116,7 @@ export class GLWorldRenderer {
 
   private sceneFbo: WebGLFramebuffer | null = null;
   private sceneColor: WebGLTexture | null = null;
-  private sceneDepth: WebGLRenderbuffer | null = null;
+  private sceneDepth: WebGLTexture | null = null;
   private bloomFbo: [WebGLFramebuffer | null, WebGLFramebuffer | null] = [null, null];
   private bloomTex: [WebGLTexture | null, WebGLTexture | null] = [null, null];
 
@@ -173,7 +173,7 @@ export class GLWorldRenderer {
     const world = createProgram(gl, WORLD_VS, WORLD_FS, [
       'uViewProj', 'uAtlas', 'uLightmap', 'uMapSize', 'uCamPos', 'uCamForward',
       'uFogColor', 'uFogDensity', 'uViewDistance', 'uExposure', 'uFlash',
-      'uTorch', 'uAlphaCutoff', 'uNormals', 'uSunDir', 'uSunAmount',
+      'uTorch', 'uAlphaCutoff', 'uNormals', 'uSunDir', 'uSunAmount', 'uCelBands', 'uCelFloor',
     ], 'world');
     const sky = createProgram(gl, SKY_VS, SKY_FS, [
       'uSkyTop', 'uSkyHorizon', 'uHorizonNdc', 'uTime', 'uYaw',
@@ -190,6 +190,8 @@ export class GLWorldRenderer {
       'uVignette', 'uTime', 'uOverlay',
       'uShadowTint', 'uShadowAmount', 'uHighlightTint', 'uHighlightAmount',
       'uSaturation', 'uContrast', 'uAberration', 'uScanlines',
+      'uDepth', 'uOutline', 'uOutlineWidth', 'uOutlineColor', 'uHalftone',
+      'uPosterize', 'uResolution',
     ], 'composite');
 
     if (!world || !sky || !sprite || !bright || !blur || !composite) return false;
@@ -462,11 +464,30 @@ export class GLWorldRenderer {
     };
 
     [this.sceneFbo, this.sceneColor] = makeTarget(width, height, hdr, this.sceneFbo, this.sceneColor);
-    if (!this.sceneDepth) this.sceneDepth = gl.createRenderbuffer();
-    gl.bindRenderbuffer(gl.RENDERBUFFER, this.sceneDepth);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, width, height);
+    // Depth goes to a texture rather than a renderbuffer, because the
+    // composite has to read it back: outlines are found by looking for places
+    // where depth changes abruptly between neighbouring pixels, which is where
+    // one surface ends and another begins.
+    //
+    // Detecting edges in the colour image instead would be cheaper and wrong -
+    // it cannot tell the boundary of an object from a dark stripe painted on
+    // it, so every brick course would come back as an outline.
+    //
+    // 24-bit, and sampled with NEAREST: interpolating depth across an edge
+    // invents a value that lies on neither surface, which softens exactly the
+    // discontinuity being looked for.
+    if (!this.sceneDepth) this.sceneDepth = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.sceneDepth);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0,
+      gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null,
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.sceneDepth);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.sceneDepth, 0);
 
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       console.error('[gl] scene framebuffer incomplete');
@@ -661,6 +682,8 @@ export class GLWorldRenderer {
     gl.uniform1i(p.u.uNormals, 2);
     gl.uniform3f(p.u.uSunDir, params.sunDir[0], params.sunDir[1], params.sunDir[2]);
     gl.uniform1f(p.u.uSunAmount, params.sunAmount);
+    gl.uniform1f(p.u.uCelBands, this.grade.celBands);
+    gl.uniform1f(p.u.uCelFloor, this.grade.celFloor);
   }
 
   private drawSky(params: GLFrameParams): void {
@@ -793,6 +816,17 @@ export class GLWorldRenderer {
     gl.uniform1f(c.u.uContrast, g.contrast);
     gl.uniform1f(c.u.uAberration, g.aberration);
     gl.uniform1f(c.u.uScanlines, g.scanlines);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.sceneDepth);
+    gl.uniform1i(c.u.uDepth, 2);
+    gl.uniform1f(c.u.uOutline, g.outline);
+    gl.uniform1f(c.u.uOutlineWidth, g.outlineWidth);
+    gl.uniform3f(c.u.uOutlineColor, g.outlineColor[0], g.outlineColor[1], g.outlineColor[2]);
+    gl.uniform1f(c.u.uHalftone, g.halftone);
+    gl.uniform1f(c.u.uPosterize, g.posterize);
+    // The scene target's size, not the display's: the depth texture and the
+    // halftone grid both live at scene resolution.
+    gl.uniform2f(c.u.uResolution, this.width, this.height);
     gl.bindVertexArray(this.quadVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
