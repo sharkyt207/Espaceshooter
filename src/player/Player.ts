@@ -33,6 +33,31 @@ const EYE_HEIGHT_BY_STANCE: Record<Stance, number> = { 0: 0.45, 1: 1.05, 2: 1.62
 /** Silhouette height in metres per stance - what bullets test against. */
 const BODY_HEIGHT_BY_STANCE: Record<Stance, number> = { 0: 0.6, 1: 1.25, 2: 1.8 };
 
+/**
+ * How quickly the body reaches the speed the stick is asking for, per second.
+ *
+ * This is the single number that decides whether the player feels like a
+ * person or like a cursor. Without it, position is integrated straight from
+ * the input: releasing the stick stops dead in one frame and a direction
+ * change is instantaneous, which is exactly what reads as "floating robot".
+ *
+ * Acceleration is higher than deceleration on purpose. Getting moving is a
+ * decision the player just made and should feel responsive; stopping is the
+ * body's mass, and letting it carry a moment further is where the weight is
+ * actually felt. Both are well above what a real body manages, because a
+ * shooter that is honest about human inertia is a shooter that feels broken.
+ */
+const ACCELERATION = 11;
+const DECELERATION = 8;
+/**
+ * Extra resistance when reversing direction rather than merely stopping.
+ *
+ * Turning a run around means shedding all of the old velocity before building
+ * the new, and treating that as a single blend understates it badly - it is
+ * what makes strafe-spam a viable dodge in games that get it wrong.
+ */
+const REVERSAL_DRAG = 1.7;
+
 /** Load in kg below which there is no penalty at all. */
 const FREE_CARRY_KG = 22;
 /** Load at which the player can barely move. */
@@ -61,6 +86,15 @@ export class Player implements Combatant {
   /** 0..100. */
   stamina = 100;
   private staminaLockout = 0;
+
+  /**
+   * Velocity in tiles/sec, in world space. State, not a derived value.
+   *
+   * The whole point of holding this is that the input sets a *target* and the
+   * body chases it, so momentum survives between frames.
+   */
+  velX = 0;
+  velY = 0;
 
   /** Ground speed in tiles/sec, measured after collision. */
   speed = 0;
@@ -98,6 +132,8 @@ export class Player implements Combatant {
     this.stamina = 100;
     this.staminaLockout = 0;
     this.speed = 0;
+    this.velX = 0;
+    this.velY = 0;
     this.sprinting = false;
     this.stepAccumulator = 0;
     this.busySeconds = 0;
@@ -241,7 +277,12 @@ export class Player implements Combatant {
     }
     speed *= directionScale;
 
-    // --- move --------------------------------------------------------------
+    // --- velocity ----------------------------------------------------------
+    //
+    // The stick sets a target velocity; the body accelerates towards it. That
+    // one indirection is what gives movement weight: a released stick coasts,
+    // a reversal has to pay for the old direction first, and a tap produces a
+    // nudge rather than a teleport.
     const cos = Math.cos(this.angle);
     const sin = Math.sin(this.angle);
     // Forward is +Y input; strafe is +X input, i.e. the camera's right vector.
@@ -250,19 +291,56 @@ export class Player implements Combatant {
     const norm = Math.hypot(worldX, worldY);
     const dirX = norm > 0.001 ? worldX / norm : 0;
     const dirY = norm > 0.001 ? worldY / norm : 0;
-    const step = Math.min(1, inputMag) * speed * dt;
 
     // Terrain cost: wading through water or scrambling over rubble is slow.
     const terrainCost = map.moveCostOf(Math.floor(this.x), Math.floor(this.y));
-    const effectiveStep = step / Math.max(1, terrainCost);
+    const targetSpeed = (Math.min(1, inputMag) * speed) / Math.max(1, terrainCost);
+    const targetX = dirX * targetSpeed;
+    const targetY = dirY * targetSpeed;
+
+    // Which rate applies depends on what the player is asking for. Speeding up
+    // is responsive, slowing down carries, and turning around costs most.
+    let rate: number;
+    if (inputMag < 0.01) {
+      rate = DECELERATION;
+    } else {
+      const speedNow = Math.hypot(this.velX, this.velY);
+      const alignment = speedNow > 0.01
+        ? (this.velX * dirX + this.velY * dirY) / speedNow
+        : 1;
+      rate = alignment >= 0
+        ? ACCELERATION
+        : DECELERATION * REVERSAL_DRAG;
+    }
+
+    // Exponential approach, framed so it is identical at any frame rate: a
+    // fixed lerp factor would make the game handle differently at 30 and 60.
+    const blend = 1 - Math.exp(-rate * dt);
+    this.velX += (targetX - this.velX) * blend;
+    this.velY += (targetY - this.velY) * blend;
+
+    // Below a knot's width, stop. Otherwise the exponential leaves a residual
+    // creep that slides the player off ledges and keeps footstep audio going.
+    if (Math.hypot(this.velX, this.velY) < 0.02) {
+      this.velX = 0;
+      this.velY = 0;
+    }
 
     const before = { x: this.x, y: this.y };
-    const moved = moveCircle(map, this.x, this.y, dirX * effectiveStep, dirY * effectiveStep, this.radius);
+    const moved = moveCircle(map, this.x, this.y, this.velX * dt, this.velY * dt, this.radius);
     this.x = moved.x;
     this.y = moved.y;
 
     const travelled = Math.hypot(this.x - before.x, this.y - before.y);
     this.speed = dt > 0 ? travelled / dt : 0;
+
+    // Walking into a wall has to kill the velocity into it, or the player
+    // keeps accelerating against the surface and shoots away the moment they
+    // clear its edge.
+    if (dt > 0 && travelled < Math.hypot(this.velX, this.velY) * dt * 0.5) {
+      this.velX = (this.x - before.x) / dt;
+      this.velY = (this.y - before.y) / dt;
+    }
 
     // --- stamina -----------------------------------------------------------
     this.updateStamina(dt, canSprint, mods.staminaDrain, mods.staminaRegen);

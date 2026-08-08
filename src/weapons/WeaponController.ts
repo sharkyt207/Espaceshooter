@@ -6,6 +6,9 @@ import type { FireMode } from '../data/ItemTypes';
 import type { Inventory } from '../inventory/Inventory';
 import { createStack, defOf, type ItemStack } from '../inventory/ItemStack';
 import { BallisticsSystem } from '../combat/Ballistics';
+import {
+  patternFor, stepAt, PATTERN_BY_CLASS, DEFAULT_PATTERN, type RecoilStep,
+} from './RecoilPattern';
 import { METERS_PER_TILE } from '../world/TileMap';
 import {
   chamberFromMagazine,
@@ -76,6 +79,17 @@ export class WeaponController {
   recoilPitch = 0;
   recoilYaw = 0;
 
+  /**
+   * How far into the pattern the current string of fire is.
+   *
+   * Reset when the weapon has been settled for long enough that the shooter
+   * has re-established their stance - see `update`. Not reset per trigger
+   * pull, because tapping the trigger to reset the pattern would make
+   * every weapon behave like its own first shot forever.
+   */
+  private shotIndex = 0;
+  private pattern: RecoilStep[] = patternFor('default');
+
   /** 0..1 aiming-down-sights progress. */
   adsProgress = 0;
   adsRequested = false;
@@ -111,6 +125,20 @@ export class WeaponController {
   // Equipment
   // =========================================================================
 
+  /**
+   * The pattern for whatever is equipped, keyed on the weapon's handling class.
+   *
+   * Per weapon *id*, not per class, so two rifles in the same family still
+   * draw distinguishable shapes - the class only supplies the character, the
+   * id supplies the specifics.
+   */
+  private patternForEquipped(): RecoilStep[] {
+    if (!this.weapon) return patternFor('default');
+    const def = defOf(this.weapon);
+    const cls = def.weapon?.weaponClass ?? '';
+    return patternFor(def.id, PATTERN_BY_CLASS[cls] ?? DEFAULT_PATTERN);
+  }
+
   /** Equip a weapon. Passing null leaves the combatant unarmed. */
   setWeapon(stack: ItemStack | null, ctx: ResolveContext, instant = false): void {
     this.weapon = stack;
@@ -119,6 +147,8 @@ export class WeaponController {
     this.heat = 0;
     this.recoilPitch = 0;
     this.recoilYaw = 0;
+    this.shotIndex = 0;
+    this.pattern = this.patternForEquipped();
     this.adsProgress = 0;
     if (!this.resolved) {
       this.state = 'idle';
@@ -215,6 +245,17 @@ export class WeaponController {
       this.recoilPitch = approachZero(this.recoilPitch, recovery * dt);
       this.recoilYaw = approachZero(this.recoilYaw, recovery * 0.75 * dt);
       this.heat = Math.max(0, this.heat - dt * 0.85);
+
+      // Once the weapon has been cool for long enough that the shooter has
+      // re-set their stance, the pattern starts from the top again.
+      //
+      // Tied to heat rather than to the trigger, deliberately. Resetting per
+      // trigger pull would mean tapping always produced first-shot recoil,
+      // which turns every automatic weapon into a better semi-automatic one
+      // and deletes the reason to learn a pattern at all. Tied to heat, a
+      // controlled burst keeps its place in the pattern and only a genuine
+      // pause gives it back.
+      if (this.heat <= 0.001 && this.shotIndex !== 0) this.shotIndex = 0;
     }
 
     // --- action timers ----------------------------------------------------
@@ -312,17 +353,22 @@ export class WeaponController {
     });
 
     // --- recoil impulse ----------------------------------------------------
+    //
+    // The direction comes from the weapon's pattern, not from a die roll. That
+    // is what makes recoil a skill: the same weapon draws the same shape every
+    // time, so a player who has learned it can hold a burst on target, and a
+    // player who has not will walk it off in a way they can go and practise.
+    // Only the magnitude varies with the situation.
     const ammoRecoil = ammoDef.ammo?.recoilModifier ?? 1;
     // Standing is least stable; going prone roughly halves felt recoil.
     const stanceStability = ctx.stance === 0 ? 0.55 : ctx.stance === 1 ? 0.78 : 1;
     const adsStability = 1 - this.adsProgress * 0.22;
     const impulse = stanceStability * adsStability * ammoRecoil * (1 + this.heat * 0.45);
 
-    this.recoilPitch += resolved.recoilVertical * (Math.PI / 180) * impulse;
-    // Horizontal kick is signed randomly but biased to keep a consistent lean,
-    // which is what makes a weapon's spray pattern learnable.
-    const lateralBias = this.rng.gaussian(0.25, 1);
-    this.recoilYaw += resolved.recoilHorizontal * (Math.PI / 180) * impulse * lateralBias;
+    const step = stepAt(this.pattern, this.shotIndex);
+    this.shotIndex++;
+    this.recoilPitch += resolved.recoilVertical * (Math.PI / 180) * impulse * step.vertical;
+    this.recoilYaw += resolved.recoilHorizontal * (Math.PI / 180) * impulse * step.horizontal;
     this.heat = clamp01(this.heat + 0.14);
 
     // --- wear --------------------------------------------------------------

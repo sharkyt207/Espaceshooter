@@ -164,6 +164,8 @@ export interface WeaponStats {
   loudness: number;
   /** Sighted (ADS) FOV multiplier when no optic is fitted. */
   ironSightZoom: number;
+  /** Handling family, which selects the recoil pattern. */
+  weaponClass: string;
 }
 
 export interface MagazineStats {

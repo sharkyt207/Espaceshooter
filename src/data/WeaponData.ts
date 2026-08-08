@@ -13,8 +13,22 @@ import { CALIBERS } from './AmmoData';
  * All names and designations are original to this project.
  */
 
+/**
+ * Handling family, which decides the weapon's recoil pattern.
+ *
+ * Separate from calibre and from the item's category, because it answers a
+ * different question: not what the weapon shoots or where it is filed in the
+ * inventory, but how it behaves in the air across a burst. A suppressed
+ * subsonic carbine and a service rifle share a calibre and handle nothing
+ * alike.
+ */
+export type WeaponClass =
+  | 'pistol' | 'smg' | 'carbine' | 'rifle' | 'battle'
+  | 'dmr' | 'sniper' | 'shotgun' | 'lmg';
+
 interface WeaponSpec {
   id: string;
+  cls: WeaponClass;
   name: string;
   short: string;
   caliber: string;
@@ -44,7 +58,7 @@ interface WeaponSpec {
 const SPECS: WeaponSpec[] = [
   // --- sidearms ----------------------------------------------------------
   {
-    id: 'wp_pw9', name: 'PW-9 Wächter', short: 'PW-9', caliber: CALIBERS.P9,
+    id: 'wp_pw9', cls: 'pistol', name: 'PW-9 Wächter', short: 'PW-9', caliber: CALIBERS.P9,
     modes: ['single'], rpm: 380, recoilV: 1.35, recoilH: 0.55, recovery: 13,
     moa: 5.2, ergo: 0.28, reloadTac: 1.9, reloadEmpty: 2.5, mag: 'mag_pw9_17',
     slots: ['muzzle', 'optic', 'tactical'], barrel: 0.11, loudness: 22,
@@ -52,7 +66,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Zuverlässige Dienstpistole. Letzte Rettung, wenn das Magazin leer ist.',
   },
   {
-    id: 'wp_tk45', name: 'TK-45 Zunder', short: 'TK-45', caliber: CALIBERS.P45,
+    id: 'wp_tk45', cls: 'pistol', name: 'TK-45 Zunder', short: 'TK-45', caliber: CALIBERS.P45,
     modes: ['single'], rpm: 300, recoilV: 2.1, recoilH: 0.85, recovery: 10.5,
     moa: 5.8, ergo: 0.31, reloadTac: 2.1, reloadEmpty: 2.8, mag: 'mag_tk45_8',
     slots: ['muzzle', 'optic', 'tactical'], barrel: 0.12, loudness: 25,
@@ -62,7 +76,7 @@ const SPECS: WeaponSpec[] = [
 
   // --- submachine guns ----------------------------------------------------
   {
-    id: 'wp_mpn9', name: 'MP-N9 Nadel', short: 'MP-N9', caliber: CALIBERS.P9,
+    id: 'wp_mpn9', cls: 'smg', name: 'MP-N9 Nadel', short: 'MP-N9', caliber: CALIBERS.P9,
     modes: ['single', 'auto'], rpm: 900, recoilV: 1.05, recoilH: 0.62, recovery: 15,
     moa: 6.5, ergo: 0.42, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_9_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.2,
@@ -70,7 +84,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Hohe Kadenz, kaum Rückstoß. In engen Gängen kaum zu schlagen.',
   },
   {
-    id: 'wp_ks45', name: 'KS-45 Klamm', short: 'KS-45', caliber: CALIBERS.P45,
+    id: 'wp_ks45', cls: 'smg', name: 'KS-45 Klamm', short: 'KS-45', caliber: CALIBERS.P45,
     modes: ['single', 'burst', 'auto'], rpm: 680, recoilV: 1.5, recoilH: 0.8, recovery: 13,
     moa: 6.0, ergo: 0.46, reloadTac: 2.4, reloadEmpty: 3.1, mag: 'mag_45_25',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.22,
@@ -80,7 +94,7 @@ const SPECS: WeaponSpec[] = [
 
   // --- assault rifles -----------------------------------------------------
   {
-    id: 'wp_sg545', name: 'SG-545 Ranke', short: 'SG-545', caliber: CALIBERS.R545,
+    id: 'wp_sg545', cls: 'rifle', name: 'SG-545 Ranke', short: 'SG-545', caliber: CALIBERS.R545,
     modes: ['single', 'auto'], rpm: 650, recoilV: 2.4, recoilH: 1.05, recovery: 11,
     moa: 3.4, ergo: 0.5, reloadTac: 2.6, reloadEmpty: 3.4, mag: 'mag_545_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.41,
@@ -88,7 +102,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Robustes Sturmgewehr. Verzeiht Vernachlässigung und schlechte Wartung.',
   },
   {
-    id: 'wp_ar556', name: 'AR-556 Falke', short: 'AR-556', caliber: CALIBERS.R556,
+    id: 'wp_ar556', cls: 'rifle', name: 'AR-556 Falke', short: 'AR-556', caliber: CALIBERS.R556,
     modes: ['single', 'burst', 'auto'], rpm: 780, recoilV: 2.05, recoilH: 0.88, recovery: 13.5,
     moa: 2.4, ergo: 0.44, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_556_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.37,
@@ -96,7 +110,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Modulares Sturmgewehr mit ausgezeichneter Präzision. Empfindlich gegen Schmutz.',
   },
   {
-    id: 'wp_sk762', name: 'SK-762 Amboss', short: 'SK-762', caliber: CALIBERS.R762S,
+    id: 'wp_sk762', cls: 'battle', name: 'SK-762 Amboss', short: 'SK-762', caliber: CALIBERS.R762S,
     modes: ['single', 'auto'], rpm: 600, recoilV: 3.3, recoilH: 1.5, recovery: 9.5,
     moa: 4.1, ergo: 0.56, reloadTac: 2.7, reloadEmpty: 3.6, mag: 'mag_762s_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.41,
@@ -106,7 +120,7 @@ const SPECS: WeaponSpec[] = [
 
   // --- marksman / battle --------------------------------------------------
   {
-    id: 'wp_dm762', name: 'DM-762 Specht', short: 'DM-762', caliber: CALIBERS.R762N,
+    id: 'wp_dm762', cls: 'dmr', name: 'DM-762 Specht', short: 'DM-762', caliber: CALIBERS.R762N,
     modes: ['single'], rpm: 420, recoilV: 3.9, recoilH: 1.1, recovery: 10,
     moa: 1.2, ergo: 0.72, reloadTac: 2.9, reloadEmpty: 3.8, mag: 'mag_762n_20',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.61,
@@ -114,7 +128,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Halbautomatisches Präzisionsgewehr. Beherrscht offene Sichtachsen vollständig.',
   },
   {
-    id: 'wp_br762', name: 'BR-762 Grimm', short: 'BR-762', caliber: CALIBERS.R762N,
+    id: 'wp_br762', cls: 'battle', name: 'BR-762 Grimm', short: 'BR-762', caliber: CALIBERS.R762N,
     modes: ['single', 'auto'], rpm: 660, recoilV: 4.6, recoilH: 2.0, recovery: 8,
     moa: 2.6, ergo: 0.8, reloadTac: 3.0, reloadEmpty: 3.9, mag: 'mag_762n_20',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.51,
@@ -124,7 +138,7 @@ const SPECS: WeaponSpec[] = [
 
   // --- shotguns -----------------------------------------------------------
   {
-    id: 'wp_fs12', name: 'FS-12 Bruch', short: 'FS-12', caliber: CALIBERS.SG12,
+    id: 'wp_fs12', cls: 'shotgun', name: 'FS-12 Bruch', short: 'FS-12', caliber: CALIBERS.SG12,
     modes: ['single'], rpm: 75, recoilV: 6.2, recoilH: 1.4, recovery: 7,
     moa: 9, ergo: 0.6, reloadTac: 0.75, reloadEmpty: 0.75, mag: 'mag_12_tube6',
     slots: ['muzzle', 'optic', 'stock', 'tactical'], barrel: 0.51,
@@ -132,7 +146,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Vorderschaftrepetierer. Wird Patrone für Patrone geladen - Zeit, die man selten hat.',
   },
   {
-    id: 'wp_sa12', name: 'SA-12 Sturmflut', short: 'SA-12', caliber: CALIBERS.SG12,
+    id: 'wp_sa12', cls: 'shotgun', name: 'SA-12 Sturmflut', short: 'SA-12', caliber: CALIBERS.SG12,
     modes: ['single'], rpm: 240, recoilV: 5.4, recoilH: 1.6, recovery: 8.5,
     moa: 8, ergo: 0.66, reloadTac: 2.8, reloadEmpty: 3.5, mag: 'mag_12_8',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.47,
@@ -142,7 +156,7 @@ const SPECS: WeaponSpec[] = [
 
   // --- specialist ---------------------------------------------------------
   {
-    id: 'wp_vs939', name: 'VS-939 Schatten', short: 'VS-939', caliber: CALIBERS.SUB9,
+    id: 'wp_vs939', cls: 'smg', name: 'VS-939 Schatten', short: 'VS-939', caliber: CALIBERS.SUB9,
     modes: ['single', 'auto'], rpm: 700, recoilV: 1.8, recoilH: 0.7, recovery: 14,
     moa: 3.0, ergo: 0.48, reloadTac: 2.5, reloadEmpty: 3.2, mag: 'mag_939_20',
     slots: ['optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.36,
@@ -150,7 +164,7 @@ const SPECS: WeaponSpec[] = [
     desc: 'Integral schallgedämpft. Unterschallmunition, kein Mündungsfeuer, kein Warnsignal.',
   },
   {
-    id: 'wp_lm556', name: 'LM-556 Dornbusch', short: 'LM-556', caliber: CALIBERS.R556,
+    id: 'wp_lm556', cls: 'lmg', name: 'LM-556 Dornbusch', short: 'LM-556', caliber: CALIBERS.R556,
     modes: ['auto'], rpm: 820, recoilV: 2.6, recoilH: 1.3, recovery: 10,
     moa: 5.5, ergo: 1.15, reloadTac: 6.5, reloadEmpty: 7.2, mag: 'mag_556_100',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'tactical'], barrel: 0.46,
@@ -191,6 +205,7 @@ export const WEAPON_ITEMS: ItemDef[] = SPECS.map((s) =>
       barrelLength: s.barrel,
       loudness: s.loudness,
       ironSightZoom: s.ironZoom ?? 1.15,
+      weaponClass: s.cls,
     },
   }),
 );

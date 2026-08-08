@@ -180,28 +180,38 @@ export class HUD {
   private buildTouchControls(): void {
     const layer = el('div', { class: 'touch-layer', style: { pointerEvents: 'none' } });
 
-    const make = (cls: string, label: string): HTMLElement => {
+    // The class carries the styling; `data-control` carries the identity. They
+    // are separate because the class is a presentation detail that a restyle is
+    // free to change, while the identity is what the layout editor addresses a
+    // button by and what the input tests hit - and a test that finds its target
+    // through a style class silently stops testing anything the day someone
+    // renames it.
+    const make = (cls: string, control: string, label: string): HTMLElement => {
       const node = el('div', { class: `touch-btn ${cls}`, text: label });
+      node.dataset.control = control;
       layer.appendChild(node);
       return node;
     };
 
-    this.fireBtn = make('fire', 'FEUER');
-    this.adsBtn = make('ads', 'ZIEL');
-    this.reloadBtn = make('reload', 'LADEN');
-    this.stanceBtn = make('stance', 'HALT');
-    this.interactBtn = make('interact', 'AKTION');
-    this.healBtn = make('heal', 'MED');
-    this.swapBtn = make('swap', 'WECHS');
-    this.fireModeBtn = make('firemode', 'MODUS');
-    this.torchBtn = make('torch', 'LAMPE');
-    this.leanLeftBtn = make('lean-left', '◀');
-    this.leanRightBtn = make('lean-right', '▶');
+    this.fireBtn = make('fire', 'fire', 'FEUER');
+    this.adsBtn = make('ads', 'ads', 'ZIEL');
+    this.reloadBtn = make('reload', 'reload', 'LADEN');
+    this.stanceBtn = make('stance', 'stance', 'HALT');
+    this.interactBtn = make('interact', 'interact', 'AKTION');
+    this.healBtn = make('heal', 'heal', 'MED');
+    this.swapBtn = make('swap', 'swapWeapon', 'WECHS');
+    this.fireModeBtn = make('firemode', 'fireMode', 'MODUS');
+    this.torchBtn = make('torch', 'toggleLight', 'LAMPE');
+    this.leanLeftBtn = make('lean-left', 'leanLeft', '◀');
+    this.leanRightBtn = make('lean-right', 'leanRight', '▶');
 
     const corner = el('div', { class: 'touch-corner' });
     this.inventoryBtn = el('div', { class: 'touch-btn', text: 'INV' });
+    this.inventoryBtn.dataset.control = 'inventory';
     this.mapBtn = el('div', { class: 'touch-btn', text: 'KARTE' });
+    this.mapBtn.dataset.control = 'map';
     this.pauseBtn = el('div', { class: 'touch-btn', text: 'MENÜ' });
+    this.pauseBtn.dataset.control = 'pause';
     corner.append(this.inventoryBtn, this.mapBtn, this.pauseBtn);
     layer.appendChild(corner);
 

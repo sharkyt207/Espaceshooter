@@ -13,6 +13,9 @@ import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
 import { AXIS_UP, AXIS_WEST, buildWorldMesh, FLOATS_PER_VERTEX } from '../src/render/gl/WorldMesh';
 import { DEFAULT_STYLE, STYLE_ORDER, STYLES, styleById } from '../src/render/Style';
+import {
+  buildPattern, patternFor, stepAt, PATTERN_BY_CLASS,
+} from '../src/weapons/RecoilPattern';
 import { MAP_BLUEPRINTS } from '../src/data/MapData';
 import { ItemDB } from '../src/data/ItemDatabase';
 import { GridContainer } from '../src/inventory/GridContainer';
@@ -1216,5 +1219,59 @@ describe('Style', () => {
     assert.equal(styleById('does-not-exist').id, DEFAULT_STYLE);
     assert.equal(styleById('').id, DEFAULT_STYLE);
     assert.equal(styleById('comic').id, 'comic');
+  });
+});
+
+describe('RecoilPattern', () => {
+  test('the same weapon draws the same shape every time', () => {
+    // The whole point: a pattern nobody can rely on is noise with extra steps.
+    const a = patternFor('wp_sg545', PATTERN_BY_CLASS.rifle);
+    const b = patternFor('wp_sg545', PATTERN_BY_CLASS.rifle);
+    assert.deepEqual(a, b, 'a pattern must be reproducible to be learnable');
+
+    const fresh = buildPattern('wp_sg545', PATTERN_BY_CLASS.rifle);
+    assert.deepEqual(fresh, a, 'and must not depend on the cache being warm');
+  });
+
+  test('different weapons draw different shapes', () => {
+    const rifle = patternFor('wp_sg545', PATTERN_BY_CLASS.rifle);
+    const smg = patternFor('wp_mpn9', PATTERN_BY_CLASS.smg);
+    const different = rifle.some(
+      (step, i) => Math.abs(step.horizontal - smg[i].horizontal) > 0.01,
+    );
+    assert.ok(different, 'two weapons should not share a spray pattern');
+  });
+
+  test('the first shot kicks hardest and the climb settles', () => {
+    const p = patternFor('wp_sk762', PATTERN_BY_CLASS.battle);
+    const early = p[0].vertical;
+    const late = p.slice(20).reduce((sum, s) => sum + s.vertical, 0) / (p.length - 20);
+    assert.ok(early > late, `first shot ${early} should exceed sustained ${late}`);
+    assert.ok(late > 0.2, 'sustained recoil should not vanish entirely');
+  });
+
+  test('every step is finite and bounded', () => {
+    for (const [cls, spec] of Object.entries(PATTERN_BY_CLASS)) {
+      for (const step of patternFor(`probe_${cls}`, spec)) {
+        assert.ok(Number.isFinite(step.vertical), `${cls} vertical is not finite`);
+        assert.ok(Number.isFinite(step.horizontal), `${cls} horizontal is not finite`);
+        assert.ok(step.vertical > 0, `${cls} should never push the muzzle down`);
+        assert.ok(Math.abs(step.horizontal) < 3, `${cls} horizontal ${step.horizontal} is wild`);
+      }
+    }
+  });
+
+  test('the pattern wraps rather than running off the end', () => {
+    const p = patternFor('wp_lm556', PATTERN_BY_CLASS.lmg);
+    // An LMG belt is longer than the pattern; it has to keep moving.
+    assert.deepEqual(stepAt(p, p.length), p[0]);
+    assert.deepEqual(stepAt(p, p.length * 3 + 5), p[5]);
+    assert.deepEqual(stepAt(p, -1), p[p.length - 1], 'and cope with a negative index');
+  });
+
+  test('horizontal drift actually reverses, so the shape is a shape', () => {
+    const p = patternFor('wp_ar556', PATTERN_BY_CLASS.rifle);
+    const signs = new Set(p.slice(0, 20).map((s) => Math.sign(s.horizontal)));
+    assert.ok(signs.size > 1, 'a pattern that only ever pulls one way is a line, not a pattern');
   });
 });

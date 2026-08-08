@@ -202,6 +202,109 @@ try {
   await page.evaluate(() => { if (window.game.session) window.game.session.player.pitch = 0; });
   console.log(`aim: drag down -> ${draggedDown.toFixed(3)} rad, drag up -> ${draggedUp.toFixed(3)} rad`);
 
+  // --- four fingers at once -------------------------------------------------
+  //
+  // The claim the whole input rewrite rests on: a finger walking, a finger
+  // looking, a finger on fire and a finger on ADS all work *simultaneously*.
+  // The previous implementation kept one movement pointer and one look pointer
+  // and silently discarded everything else, which no screenshot and no
+  // single-touch test could ever have caught - the game simply stopped
+  // responding to a hand that held it the way a claw player holds it.
+  const multitouch = await page.evaluate(async () => {
+    const g = window.game;
+    if (!g.session) return null;
+    const input = g.input;
+    input.releaseAll();
+    g.session.player.pitch = 0;
+
+    const surface = document.querySelector('.game-canvas').parentElement;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const ev = (type, id, x, y) =>
+      new PointerEvent(type, {
+        pointerId: id, clientX: x, clientY: y, bubbles: true,
+        pointerType: 'touch', isPrimary: id === 1,
+      });
+
+    // 1: left thumb, walking forward.
+    //
+    // A walk rather than a full-throw sprint, because sprinting correctly
+    // refuses to let the weapon be shouldered - testing ADS against a
+    // sprinting player would be testing the wrong rule.
+    const stickX = W * 0.18;
+    const stickY = H * 0.7;
+    surface.dispatchEvent(ev('pointerdown', 1, stickX, stickY));
+    surface.dispatchEvent(ev('pointermove', 1, stickX, stickY - 30));
+
+    // 2: right thumb, dragging the camera down against recoil.
+    const lookX = W * 0.75;
+    const lookY = H * 0.55;
+    surface.dispatchEvent(ev('pointerdown', 2, lookX, lookY));
+
+    // 3 and 4: index fingers on the fire and ADS buttons.
+    const fireBtn = document.querySelector('[data-control="fire"]');
+    const adsBtn = document.querySelector('[data-control="ads"]');
+    if (fireBtn) fireBtn.dispatchEvent(ev('pointerdown', 3, 10, 10));
+    if (adsBtn) adsBtn.dispatchEvent(ev('pointerdown', 4, 20, 20));
+
+    // Now move the look finger *while everything else is held down*. This is
+    // the exact combination the old router dropped.
+    //
+    // The effect is measured on the player's pitch rather than on
+    // `state.lookY`: the look delta is an accumulator the game loop drains and
+    // clears every frame, so reading it after a wait reliably returns zero and
+    // would make this assertion pass or fail on timing rather than on
+    // behaviour. Pitch is where the input actually lands.
+    const pitchBefore = g.session.player.pitch;
+    surface.dispatchEvent(ev('pointermove', 2, lookX, lookY + 70));
+    await new Promise((r) => setTimeout(r, 120));
+    const pitchAfter = g.session?.player.pitch ?? pitchBefore;
+
+    // ADS is observed on the weapon, not on the raw input flag. Under
+    // toggle-to-aim - which is the default - the game deliberately consumes
+    // `state.ads` and flips a session toggle instead, so the flag is false one
+    // tick after the press by design. What the player actually sees is the
+    // weapon coming up.
+    const sample = {
+      pointers: input.activePointers,
+      moveY: input.state.moveY,
+      pitchDelta: pitchAfter - pitchBefore,
+      fire: input.state.fire,
+      aiming: (g.session?.playerWeapon.adsProgress ?? 0) > 0.05,
+      sprinting: g.session?.player.sprinting ?? false,
+      foundButtons: !!fireBtn && !!adsBtn,
+    };
+
+    for (const [id, el] of [[1, surface], [2, surface], [3, fireBtn], [4, adsBtn]]) {
+      if (el) el.dispatchEvent(ev('pointerup', id, 0, 0));
+    }
+    input.releaseAll();
+    return sample;
+  });
+
+  assert(multitouch, 'the raid should still be running for the multitouch check');
+  assert(
+    multitouch.foundButtons,
+    'the fire and ADS buttons must be findable, or this test proves nothing',
+  );
+  assert(
+    multitouch.moveY > 0.3,
+    `the stick must still read forward with three other fingers down (was ${multitouch.moveY.toFixed(2)})`,
+  );
+  assert(
+    multitouch.pitchDelta < -0.01,
+    `the camera must still turn with three other fingers down ` +
+      `(pitch moved ${multitouch.pitchDelta.toFixed(4)} rad)`,
+  );
+  assert(multitouch.fire, 'fire must stay held while walking and looking');
+  assert(!multitouch.sprinting, 'the stick should be at a walk for this check, not a sprint');
+  assert(multitouch.aiming, 'the weapon must come up while walking, looking and firing');
+  console.log(
+    `multitouch: ${multitouch.pointers} pointers routed, ` +
+      `move ${multitouch.moveY.toFixed(2)}, pitch ${multitouch.pitchDelta.toFixed(3)} rad, ` +
+      `fire ${multitouch.fire}, aiming ${multitouch.aiming}`,
+  );
+
   // --- play -----------------------------------------------------------------
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(1500);

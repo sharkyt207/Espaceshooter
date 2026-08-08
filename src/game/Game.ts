@@ -562,8 +562,12 @@ export class Game {
     if (!overlayOpen) {
       this.consumeRaidActions(session);
       session.applyInput(dt, input, this.settings.toggleAds);
-      // Look sensitivity scales down while aiming - handled by the input layer.
+      // Look sensitivity scales down while aiming - handled by the input
+      // layer, which also needs the optic's magnification: a 4x scope sweeps
+      // four times as much of the field of view for the same thumb travel, and
+      // one ADS setting cannot serve both irons and glass.
       this.input.adsFactor = session.playerWeapon.adsProgress;
+      this.input.magnification = session.playerWeapon.resolved?.zoom ?? 1;
     } else {
       // The world keeps running while a menu is open: looting is not a
       // time-out, and that is the point.
