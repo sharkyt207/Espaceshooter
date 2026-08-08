@@ -112,16 +112,16 @@ export interface TouchConfig {
  */
 function defaultButtons(): Record<ButtonId, ButtonLayout> {
   return {
-    fire:        { x: 0.895, y: 0.79, size: 0.30, opacity: 0.85 },
-    ads:         { x: 0.80, y: 0.60, size: 0.22, opacity: 0.8 },
-    reload:      { x: 0.925, y: 0.55, size: 0.20, opacity: 0.8 },
-    stance:      { x: 0.735, y: 0.82, size: 0.18, opacity: 0.8 },
-    jump:        { x: 0.66, y: 0.66, size: 0.17, opacity: 0.75 },
-    interact:    { x: 0.635, y: 0.80, size: 0.19, opacity: 0.85 },
-    swapWeapon:  { x: 0.845, y: 0.42, size: 0.18, opacity: 0.8 },
-    fireMode:    { x: 0.935, y: 0.32, size: 0.16, opacity: 0.75 },
-    heal:        { x: 0.735, y: 0.52, size: 0.18, opacity: 0.8 },
-    toggleLight: { x: 0.045, y: 0.30, size: 0.16, opacity: 0.75 },
+    fire:        { x: 0.895, y: 0.79, size: 0.222, opacity: 0.85 },
+    ads:         { x: 0.80, y: 0.60, size: 0.165, opacity: 0.8 },
+    reload:      { x: 0.935, y: 0.52, size: 0.155, opacity: 0.8 },
+    stance:      { x: 0.735, y: 0.84, size: 0.135, opacity: 0.8 },
+    jump:        { x: 0.655, y: 0.63, size: 0.125, opacity: 0.75 },
+    interact:    { x: 0.625, y: 0.83, size: 0.145, opacity: 0.85 },
+    swapWeapon:  { x: 0.845, y: 0.40, size: 0.135, opacity: 0.8 },
+    fireMode:    { x: 0.945, y: 0.26, size: 0.12, opacity: 0.75 },
+    heal:        { x: 0.700, y: 0.44, size: 0.135, opacity: 0.8 },
+    toggleLight: { x: 0.045, y: 0.32, size: 0.12, opacity: 0.75 },
     inventory:   { x: 0.04, y: 0.06, size: 0.13, opacity: 0.7 },
     map:         { x: 0.10, y: 0.06, size: 0.13, opacity: 0.7 },
     pause:       { x: 0.16, y: 0.06, size: 0.13, opacity: 0.7 },
@@ -173,25 +173,25 @@ export function applyPreset(config: TouchConfig, preset: ClawPreset): TouchConfi
   };
 
   if (preset === 'two') {
-    set('fire', { x: 0.90, y: 0.80, size: 0.34, opacity: 0.9 });
-    set('ads', { x: 0.755, y: 0.63, size: 0.24, opacity: 0.85 });
-    set('reload', { x: 0.935, y: 0.52, size: 0.21, opacity: 0.85 });
-    set('interact', { x: 0.615, y: 0.80, size: 0.20, opacity: 0.9 });
+    set('fire', { x: 0.90, y: 0.80, size: 0.25, opacity: 0.9 });
+    set('ads', { x: 0.745, y: 0.62, size: 0.18, opacity: 0.85 });
+    set('reload', { x: 0.94, y: 0.50, size: 0.16, opacity: 0.85 });
+    set('interact', { x: 0.605, y: 0.83, size: 0.15, opacity: 0.9 });
     next.moveZoneWidth = 0.40;
   } else if (preset === 'three') {
-    set('fire', { x: 0.895, y: 0.79, size: 0.30, opacity: 0.85 });
-    set('ads', { x: 0.80, y: 0.60, size: 0.22, opacity: 0.8 });
-    set('reload', { x: 0.925, y: 0.55, size: 0.20, opacity: 0.8 });
-    set('interact', { x: 0.635, y: 0.80, size: 0.19, opacity: 0.85 });
+    set('fire', { x: 0.895, y: 0.79, size: 0.222, opacity: 0.85 });
+    set('ads', { x: 0.795, y: 0.60, size: 0.165, opacity: 0.8 });
+    set('reload', { x: 0.935, y: 0.52, size: 0.155, opacity: 0.8 });
+    set('interact', { x: 0.625, y: 0.83, size: 0.145, opacity: 0.85 });
     next.moveZoneWidth = 0.42;
   } else {
     // Four fingers: the shoulders of the screen belong to the index fingers,
     // so the thumbs never have to leave the stick or the look area.
-    set('fire', { x: 0.93, y: 0.16, size: 0.24, opacity: 0.8 });
-    set('ads', { x: 0.07, y: 0.16, size: 0.22, opacity: 0.8 });
-    set('reload', { x: 0.93, y: 0.44, size: 0.19, opacity: 0.8 });
-    set('interact', { x: 0.62, y: 0.80, size: 0.19, opacity: 0.85 });
-    set('stance', { x: 0.07, y: 0.44, size: 0.18, opacity: 0.8 });
+    set('fire', { x: 0.93, y: 0.15, size: 0.18, opacity: 0.8 });
+    set('ads', { x: 0.07, y: 0.15, size: 0.17, opacity: 0.8 });
+    set('reload', { x: 0.935, y: 0.40, size: 0.145, opacity: 0.8 });
+    set('interact', { x: 0.615, y: 0.83, size: 0.145, opacity: 0.85 });
+    set('stance', { x: 0.07, y: 0.40, size: 0.14, opacity: 0.8 });
     next.moveZoneWidth = 0.44;
   }
   return next;

@@ -460,6 +460,21 @@ uniform float uScanlines;
 
 /** Depth buffer of the scene, for finding silhouettes. */
 uniform sampler2D uDepth;
+
+/**
+ * Distance in metres, recovered from the depth buffer.
+ *
+ * The buffer is very nearly a scaled reciprocal of distance, so almost all of
+ * its precision sits near the camera. Converting back gives a value with a
+ * physical meaning, which is what lets the edge test below use a threshold in
+ * metres rather than in buffer units.
+ */
+float viewDepth(vec2 uv) {
+  float z = texture(uDepth, uv).r * 2.0 - 1.0;
+  const float near = 0.02;
+  const float far = 288.0;
+  return (2.0 * near * far) / (far + near - z * (far - near));
+}
 uniform float uOutline;
 uniform float uOutlineWidth;
 uniform vec3 uOutlineColor;
@@ -470,20 +485,6 @@ uniform vec2 uResolution;
 
 out vec4 fragColor;
 
-/**
- * Depth, linearised.
- *
- * The buffer holds a non-linear value - almost all of its precision sits close
- * to the near plane - so a fixed threshold on the raw number would find every
- * edge at arm's length and none at all across a courtyard. Converting back to
- * view-space distance first makes one threshold work at every range.
- */
-float linearDepth(vec2 uv) {
-  float z = texture(uDepth, uv).r * 2.0 - 1.0;
-  const float near = 0.02;
-  const float far = 240.0;
-  return (2.0 * near * far) / (far + near - z * (far - near));
-}
 
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
@@ -579,26 +580,36 @@ void main() {
   // as an edge and the whole background fills in solid.
   if (uOutline > 0.0) {
     vec2 texel = uOutlineWidth / uResolution;
-    float centre = linearDepth(vUv);
-    float l = linearDepth(vUv - vec2(texel.x, 0.0));
-    float r = linearDepth(vUv + vec2(texel.x, 0.0));
-    float u = linearDepth(vUv - vec2(0.0, texel.y));
-    float dn = linearDepth(vUv + vec2(0.0, texel.y));
 
-    // The *second* difference, not the first.
+    // A silhouette is a break in the surface, and the trick is measuring that
+    // without also flagging a floor seen at a grazing angle - which recedes
+    // steeply and is not an edge anywhere.
     //
-    // A first difference measures slope, and a floor seen at a grazing angle
-    // has an enormous slope - the ground would ink up solid while an actual
-    // silhouette three metres away went unmarked. On any flat surface, however
-    // steeply it recedes, the centre sample sits halfway between its two
-    // neighbours; only a real discontinuity breaks that. Measuring how far the
-    // centre departs from that midpoint is therefore blind to slope and sees
-    // only breaks, which is exactly what a silhouette is.
-    float d = abs(l + r - 2.0 * centre) + abs(u + dn - 2.0 * centre);
+    // Neither obvious approach works. A first difference measures slope, so
+    // the ground inks in solid. A second difference of *distance* is not zero
+    // on a plane either, because distance is not linear across the screen -
+    // that was the second attempt, and it drew the tile grid in perspective.
+    //
+    // Reciprocal distance is the quantity that *is* linear in screen space for
+    // any plane, at any angle. So the centre sample of a flat surface sits
+    // exactly halfway between its neighbours in 1/z, however steeply it
+    // recedes, and only a genuine discontinuity breaks that.
+    float zc = viewDepth(vUv);
+    float invC = 1.0 / max(zc, 0.01);
+    float invL = 1.0 / max(viewDepth(vUv - vec2(texel.x, 0.0)), 0.01);
+    float invR = 1.0 / max(viewDepth(vUv + vec2(texel.x, 0.0)), 0.01);
+    float invU = 1.0 / max(viewDepth(vUv - vec2(0.0, texel.y)), 0.01);
+    float invD = 1.0 / max(viewDepth(vUv + vec2(0.0, texel.y)), 0.01);
 
-    // Proportional to distance: an edge is a break of a fraction of a percent
-    // of how far away the surface is, not a fixed number of metres.
-    float edge = smoothstep(0.004, 0.02, d / max(centre, 0.5));
+    float d = abs(invL + invR - 2.0 * invC) + abs(invU + invD - 2.0 * invC);
+
+    // Multiplying by the square of the distance converts that back into
+    // metres: a step of one metre reads as roughly 1.0 whether it is three
+    // metres away or forty. So the threshold is a real size - edges bigger
+    // than about fifteen centimetres get inked - rather than a number tuned
+    // against one particular scene.
+    float metric = d * zc * zc;
+    float edge = smoothstep(0.15, 0.45, metric);
     color = mix(color, uOutlineColor, edge * uOutline);
   }
 

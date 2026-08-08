@@ -1300,8 +1300,12 @@ html, body {
 .hud-notifications {
   position: absolute;
   top: calc(74px + var(--safe-t));
-  right: calc(12px + var(--safe-r));
-  width: min(38vw, 300px);
+  /* Clear of the right-hand control column.
+     Notifications are transient and the buttons are permanent, so the
+     transient thing moves. Anchored past the widest button the default layout
+     puts in that column, with room for the largest size the editor allows. */
+  right: calc(12px + var(--safe-r) + 12vh);
+  width: min(34vw, 280px);
   display: flex;
   flex-direction: column;
   gap: 4px;

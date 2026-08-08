@@ -80,7 +80,7 @@ for (const device of DEVICES) {
 
   const audit = async (label) => {
     const found = await page.evaluate(() => {
-      const out = { overflow: [], small: [], pageScrollsX: false };
+      const out = { overflow: [], small: [], overlap: [], pageScrollsX: false };
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       out.pageScrollsX = document.documentElement.scrollWidth > vw + 1;
@@ -126,15 +126,43 @@ for (const device of DEVICES) {
           out.small.push(`${describe(el)} ${Math.round(r.width)}x${Math.round(r.height)}`);
         }
       }
+      // --- overlapping touch controls ---------------------------------------
+      //
+      // The floating raid buttons are absolutely positioned from a layout the
+      // player can edit, so nothing in the cascade stops two of them landing on
+      // top of each other. Overflow does not catch it - both can sit happily
+      // inside the viewport while covering one another - and the failure is
+      // vicious in play: the finger presses whichever the stacking order put on
+      // top, and the other control is simply gone with no visible cause.
+      const buttons = [...document.querySelectorAll('.touch-btn')].filter(visible);
+      for (let i = 0; i < buttons.length; i++) {
+        for (let j = i + 1; j < buttons.length; j++) {
+          const a = buttons[i].getBoundingClientRect();
+          const b = buttons[j].getBoundingClientRect();
+          // A few pixels of contact is fine - these are circles inside square
+          // boxes, so the corners can touch while the controls do not.
+          const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+          const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+          if (overlapX > 6 && overlapY > 6) {
+            out.overlap.push(
+              `${buttons[i].textContent?.trim()} / ${buttons[j].textContent?.trim()} ` +
+                `by ${Math.round(overlapX)}x${Math.round(overlapY)}px`,
+            );
+          }
+        }
+      }
+
       // De-duplicate: one broken rule produces dozens of identical rows.
       out.overflow = [...new Set(out.overflow)].slice(0, 6);
       out.small = [...new Set(out.small)].slice(0, 6);
+      out.overlap = [...new Set(out.overlap)].slice(0, 8);
       return out;
     });
 
     if (found.pageScrollsX) problems.push(`${device.name}/${label}: page scrolls horizontally`);
     for (const o of found.overflow) problems.push(`${device.name}/${label}: overflows viewport - ${o}`);
     for (const s of found.small) problems.push(`${device.name}/${label}: touch target too small - ${s}`);
+    for (const o of found.overlap) problems.push(`${device.name}/${label}: touch buttons overlap - ${o}`);
   };
 
   // --- walk the screens ----------------------------------------------------
