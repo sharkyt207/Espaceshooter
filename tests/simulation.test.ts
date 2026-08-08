@@ -38,6 +38,7 @@ import {
 import { LootSystem } from '../src/loot/LootSystem';
 import { LOOT_TABLES } from '../src/loot/LootTables';
 import { Progression } from '../src/meta/Progression';
+import { Profile } from '../src/meta/Profile';
 import { Hideout } from '../src/meta/Hideout';
 import { QuestSystem } from '../src/meta/Quests';
 import { TraderSystem } from '../src/meta/Traders';
@@ -1228,6 +1229,53 @@ describe('Ammunition choice', () => {
       peekNextRound(weapon), 'ammo_545_hp',
       'the player asked for the soft round and should get it',
     );
+  });
+
+  test('the choice survives the raid it was made in', () => {
+    // The controller is rebuilt on every deployment, so a preference stored
+    // only there died at extraction and had to be re-entered before every
+    // fight. Nobody re-enters a setting before every fight; they stop using
+    // it. This models the round trip: choose, save, reload, deploy again.
+    // Take the key from the data rather than typing it. My first version
+    // guessed "5.45x39" and the real string is "5.45x39mm" - a wrong key does
+    // not error, it silently misses and hands the player the auto-pick.
+    const rifleCaliber = ItemDB.get('wp_sg545').weapon!.caliber;
+
+    const profile = new Profile(new EventBus<Record<string, never>>() as never, 99);
+    profile.ammoPreferences[rifleCaliber] = 'ammo_545_hp';
+
+    const restored = new Profile(new EventBus<Record<string, never>>() as never, 99);
+    const saved = JSON.parse(JSON.stringify(profile.serialize()));
+    restored.ammoPreferences = saved.ammoPreferences ?? {};
+
+    assert.equal(
+      restored.ammoPreferences[rifleCaliber], 'ammo_545_hp',
+      'the cartridge choice has to survive a save and load',
+    );
+
+    // The stored round must actually be loadable in that weapon, or the
+    // preference is unreachable however faithfully it round-trips.
+    assert.equal(
+      ItemDB.get('ammo_545_hp').ammo!.caliber, rifleCaliber,
+      'the preferred round has to match the calibre it is filed under',
+    );
+  });
+
+  test('preferences are per calibre, so a sidearm keeps its own', () => {
+    // A loadout is a rifle and a pistol. "Soft point in the pistol,
+    // armour-piercing in the rifle" is an ordinary thing to want, and a single
+    // global preference could not express it.
+    const rifleCal = ItemDB.get('ammo_545_bp').ammo!.caliber;
+    const pistolCal = ItemDB.get('ammo_9_hp').ammo!.caliber;
+    assert.notEqual(rifleCal, pistolCal, 'the two should be different calibres');
+
+    const profile = new Profile(new EventBus<Record<string, never>>() as never, 5);
+    profile.ammoPreferences[rifleCal] = 'ammo_545_bp';
+    profile.ammoPreferences[pistolCal] = 'ammo_9_hp';
+
+    assert.equal(profile.ammoPreferences[rifleCal], 'ammo_545_bp');
+    assert.equal(profile.ammoPreferences[pistolCal], 'ammo_9_hp',
+      'setting the rifle preference must not disturb the sidearm');
   });
 
   test('a preference it cannot honour falls back rather than failing', () => {

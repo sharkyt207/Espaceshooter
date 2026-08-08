@@ -168,6 +168,7 @@ export class RaidSession {
     const weapons = this.player.inventory.weapons();
     this.activeWeaponSlot = weapons[0]?.slot ?? 'primary';
     this.playerWeapon.setWeapon(weapons[0]?.stack ?? null, this.resolveContext(), true);
+    this.restorePreferredAmmo();
 
     this.audio.setAmbience(this.conditions.precipitation, this.conditions.wind);
 
@@ -383,11 +384,33 @@ export class RaidSession {
    */
   setPreferredAmmo(ammoId: string | null): void {
     this.playerWeapon.preferredAmmo = ammoId;
+
+    // Remember it past the extraction. The controller is rebuilt for every
+    // deployment, so without this the choice died with the raid and the player
+    // had to make it again before every fight - which is how a feature ends up
+    // present and unused.
+    const caliber = this.playerWeapon.resolved?.caliber;
+    if (!caliber) return;
+    if (ammoId) this.profile.ammoPreferences[caliber] = ammoId;
+    else delete this.profile.ammoPreferences[caliber];
   }
 
   /** The player's current cartridge choice, or null for automatic. */
   get preferredAmmo(): string | null {
     return this.playerWeapon.preferredAmmo;
+  }
+
+  /**
+   * Re-apply the saved preference for whatever is now in the player's hands.
+   *
+   * Preferences are per calibre, so swapping from a rifle to a sidearm has to
+   * look up a different one. Called wherever the active weapon changes.
+   */
+  private restorePreferredAmmo(): void {
+    const caliber = this.playerWeapon.resolved?.caliber;
+    this.playerWeapon.preferredAmmo = caliber
+      ? this.profile.ammoPreferences[caliber] ?? null
+      : null;
   }
 
   /**
@@ -440,6 +463,8 @@ export class RaidSession {
     if (next.slot === this.activeWeaponSlot && weapons.length === 1) return;
     this.activeWeaponSlot = next.slot;
     this.playerWeapon.setWeapon(next.stack, this.resolveContext());
+    // Preferences are per calibre, so a swap has to look up a different one.
+    this.restorePreferredAmmo();
     this.profile.progression.addSkillXp('weaponHandling', 4);
   }
 

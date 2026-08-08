@@ -56,6 +56,22 @@ export class Profile {
   /** Timestamp of the last metagame tick, for offline progress. */
   lastTickMs = Date.now();
 
+  /**
+   * Cartridge the player prefers to load, by calibre. Null entries mean
+   * "pick the hardest penetrator", which is the automatic behaviour.
+   *
+   * This lives on the profile rather than on the weapon because the weapon
+   * controller is rebuilt for every deployment, so a choice made in a raid
+   * died with it. A preference the player has to re-enter before every fight
+   * is one they will stop entering, which would have left the feature
+   * technically present and practically unused.
+   *
+   * Keyed by calibre rather than a single value because a loadout can carry a
+   * rifle and a sidearm, and "soft point in the pistol, armour-piercing in the
+   * rifle" is a perfectly ordinary thing to want.
+   */
+  ammoPreferences: Record<string, string> = {};
+
   constructor(private readonly bus: GameBus, seed: number) {
     this.progression = new Progression(bus);
     this.traders = new TraderSystem(seed);
@@ -348,6 +364,7 @@ export class Profile {
       deaths: this.deaths,
       bestHaul: this.bestHaul,
       totalEarned: this.totalEarned,
+      ammoPreferences: this.ammoPreferences,
       lastTickMs: Date.now(),
       stash: { width: this.stash.width, height: this.stash.height, slots: this.stash.slots },
       loadout: {

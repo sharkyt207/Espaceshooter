@@ -81,7 +81,7 @@ wie das Ziel selbst.
 | Anbauteile | 34, mit achsengetrennter Wirkung: Griff waagerecht, Schaft senkrecht |
 | Körperteilschaden | 7 Zonen, Blutungen, Brüche, Durchschuss auf zerstörte Glieder |
 | Munition, Kaliber | 42 Sorten, Penetration und Fragmentierung getrennt |
-| Munitionswahl | **in diesem Durchgang gebaut** — pro Sorte im Inventar wählbar, wirkt beim nächsten Nachladen |
+| Munitionswahl | **in diesem Durchgang gebaut** — pro Kaliber wählbar, im Profil gespeichert, wirkt beim nächsten Nachladen |
 
 ---
 
@@ -182,7 +182,7 @@ für das Compositing etwa 100 ms je Bild.
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
 | Karten | 3 (96², 78², 66²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 147 |
+| Simulationstests | 149 |
 
 ---
 
@@ -190,7 +190,7 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 147 Simulationstests, ohne Browser |
+| `npm test` | 149 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
 | `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |

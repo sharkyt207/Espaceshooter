@@ -254,6 +254,9 @@ function applyProfile(profile: Profile, data: Record<string, unknown>): void {
   profile.deaths = (data.deaths as number) ?? 0;
   profile.bestHaul = (data.bestHaul as number) ?? 0;
   profile.totalEarned = (data.totalEarned as number) ?? 0;
+  // Older saves predate ammunition preferences; an empty map is exactly the
+  // "let the weapon choose" behaviour they had, so there is nothing to migrate.
+  profile.ammoPreferences = (data.ammoPreferences as Record<string, string>) ?? {};
 
   profile.progression.restore((data.progression as never) ?? {});
   profile.hideout.restore((data.hideout as never) ?? {});
