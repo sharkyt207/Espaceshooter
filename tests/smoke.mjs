@@ -79,6 +79,48 @@ const topmostScreen = (page) =>
 const tab = (label) =>
   page.locator('.screen:not(.hidden) .nav-item, .screen:not(.hidden) .tab', { hasText: label }).first();
 
+/**
+ * Top the player back up, and confirm it worked.
+ *
+ * The raid runs live through this whole suite with twenty-six hostiles in it,
+ * and they are perfectly capable of killing the player between two steps. When
+ * that happened the raid ended early and every subsequent assertion failed on
+ * something unrelated to what it was checking - the map "not opening" because
+ * there was no longer a raid to open it in.
+ *
+ * Healing rather than pausing the world: the AI staying live is the point of
+ * the performance measurement at the end, and a suite that only passes against
+ * a frozen game is not testing the game. What the player's survival is *not*
+ * is the thing under test here - this walks the interface and the raid
+ * lifecycle, and dying mid-walk is noise.
+ *
+ * The check is not optional. The first version of this wrote `part.max` under
+ * the wrong name, so every part's hp became undefined - which did not heal the
+ * player, it corrupted them, and swapped one flaky step for another. A silent
+ * no-op is worse than the flake it replaced.
+ */
+const keepAlive = async () => {
+  const state = await page.evaluate(() => {
+    const s = window.game.session;
+    if (!s) return null;
+    for (const part of Object.values(s.player.health.parts)) {
+      part.hp = part.max;
+      part.lightBleeds = 0;
+      part.heavyBleeds = 0;
+      part.fractured = false;
+    }
+    s.player.stamina = 100;
+    return { hp: s.player.health.totalHp, alive: s.player.alive };
+  });
+  if (state) {
+    assert(
+      Number.isFinite(state.hp) && state.hp > 0 && state.alive,
+      `keepAlive must leave a live player, got ${JSON.stringify(state)}`,
+    );
+  }
+  return state;
+};
+
 let failure = null;
 try {
   await page.goto(URL, { waitUntil: 'networkidle' });
@@ -142,6 +184,7 @@ try {
   // is shaded by, so switching it on must measurably brighten the middle of
   // the frame. A screenshot alone would not catch the beam silently going
   // nowhere.
+  await keepAlive();
   const conditions = await page.evaluate(() => window.game.session?.conditions.label ?? '');
   assert(conditions.startsWith('Nacht'), `expected a night raid, got ${conditions}`);
   assert(
@@ -179,6 +222,7 @@ try {
   // Down means down. The sign runs through input, the player, ballistics and
   // the horizon, and a flip anywhere along it is invisible in every other test
   // - it just makes the game feel wrong.
+  await keepAlive();
   const pitchAfterDrag = async (dy) =>
     page.evaluate(async (dy) => {
       const g = window.game;
@@ -210,6 +254,7 @@ try {
   // and silently discarded everything else, which no screenshot and no
   // single-touch test could ever have caught - the game simply stopped
   // responding to a hand that held it the way a claw player holds it.
+  await keepAlive();
   const multitouch = await page.evaluate(async () => {
     const g = window.game;
     if (!g.session) return null;
@@ -306,6 +351,7 @@ try {
   );
 
   // --- play -----------------------------------------------------------------
+  await keepAlive();
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(1500);
   await page.keyboard.up('KeyW');
@@ -319,6 +365,7 @@ try {
       `at ${perf.res}  (${perf.ai} AI alive)`,
   );
 
+  await keepAlive();
   await page.mouse.move(450, 207);
   await page.mouse.down();
   await page.waitForTimeout(700);
@@ -333,6 +380,7 @@ try {
   await shot('raid-crouched');
 
   // --- overlays --------------------------------------------------------------
+  await keepAlive();
   await page.keyboard.press('KeyM');
   await page.waitForTimeout(700);
   assert((await visibleScreens()).includes('Sektorkarte'), 'the map should open');
@@ -340,6 +388,7 @@ try {
   await page.keyboard.press('KeyM');
   await page.waitForTimeout(400);
 
+  await keepAlive();
   await page.keyboard.press('Tab');
   await page.waitForTimeout(700);
   assert((await visibleScreens()).includes('Inventar'), 'the inventory should open');
@@ -358,13 +407,7 @@ try {
   // exercise the abandon path: skipping it when the player happens to have
   // died would quietly stop testing it on exactly the runs where the game was
   // most active.
-  await page.evaluate(() => {
-    const s = window.game.session;
-    if (!s) return;
-    for (const part of Object.values(s.player.health.parts)) part.hp = part.maxHp;
-    s.player.health.bleeding = 0;
-  });
-  await page.waitForTimeout(120);
+  await keepAlive();
 
   if ((await page.evaluate(() => window.game.state)) === 'raid') {
     await page.keyboard.press('Escape');

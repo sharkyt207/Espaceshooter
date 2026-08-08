@@ -1,6 +1,7 @@
 import type { SoundKind } from '../core/GameEvents';
 import { clamp01 } from '../core/Math2D';
 import { fxRng } from '../core/Random';
+import { spatialise, type ListenerState, type SpatialResult } from './Spatial';
 
 /**
  * AudioEngine - fully procedural sound, synthesised at runtime.
@@ -24,16 +25,6 @@ import { fxRng } from '../core/Random';
 
 interface Voice {
   endsAt: number;
-}
-
-export interface ListenerState {
-  x: number;
-  y: number;
-  angle: number;
-  /** Hearing multiplier from equipment (helmets muffle). */
-  hearingFactor: number;
-  /** Deafened 0..1 after firing unsuppressed - recovers over a second or two. */
-  deafness: number;
 }
 
 /** Maximum simultaneous voices. Beyond this, new sounds are dropped. */
@@ -132,36 +123,19 @@ export class AudioEngine {
   }
 
   /**
-   * Compute distance gain, stereo pan and filter cutoff for a world position.
-   * Returns null when the sound is inaudible.
+   * Place a sound relative to the listener.
+   *
+   * The arithmetic lives in `audio/Spatial.ts` so it can be tested without an
+   * `AudioContext` - it decides whether a player can locate a firefight, which
+   * is far too important to be reachable only through a browser.
    */
   private spatialise(
     x: number,
     y: number,
     radius: number,
     occlusion: number,
-  ): { gain: number; pan: number; cutoff: number } | null {
-    const dx = x - this.listener.x;
-    const dy = y - this.listener.y;
-    const dist = Math.hypot(dx, dy);
-    const audibleRange = radius * this.listener.hearingFactor;
-    if (dist > audibleRange * 1.6) return null;
-
-    // Inverse falloff with a soft floor - distant shots stay just audible,
-    // which is what lets the player orient towards a firefight.
-    const attenuation = 1 / (1 + (dist / Math.max(1, audibleRange * 0.35)) ** 1.7);
-    let gain = attenuation * (1 - occlusion * 0.72) * (1 - this.listener.deafness * 0.85);
-    gain *= this.listener.hearingFactor;
-    if (gain < 0.004) return null;
-
-    // Pan from the bearing relative to where the listener is facing.
-    const bearing = Math.atan2(dy, dx) - this.listener.angle;
-    const pan = clamp01(Math.abs(Math.sin(bearing))) * Math.sign(Math.sin(bearing));
-
-    // Air and walls both eat high frequencies.
-    const cutoff = Math.max(320, 16000 * (1 - occlusion * 0.8) * (1 / (1 + dist * 0.08)));
-
-    return { gain, pan, cutoff };
+  ): SpatialResult | null {
+    return spatialise(this.listener, x, y, radius, occlusion);
   }
 
   /**
@@ -176,10 +150,12 @@ export class AudioEngine {
 
     switch (kind) {
       case 'gunshot':
-        this.playGunshot(spatial, intensity, false);
+        // `radius` is the weapon's loudness, which is how far the shot can be
+        // heard - and that is set by the cartridge, so it doubles as calibre.
+        this.playGunshot(spatial, intensity, false, radius);
         break;
       case 'suppressed':
-        this.playGunshot(spatial, intensity, true);
+        this.playGunshot(spatial, intensity, true, radius);
         break;
       case 'explosion':
         this.playExplosion(spatial, intensity);
@@ -271,9 +247,31 @@ export class AudioEngine {
    * A suppressor removes most of the crack and shortens the tail, leaving the
    * mechanical action - which is exactly what it sounds like in reality.
    */
-  private playGunshot(spatial: { gain: number; pan: number; cutoff: number }, intensity: number, suppressed: boolean): void {
+  /**
+   * A gunshot, with its character taken from how loud the weapon is.
+   *
+   * Every firearm previously produced the same sound at a different volume,
+   * which threw away most of what a shot can tell you. Loudness already tracks
+   * cartridge size across the whole arsenal - a pistol is 22, a battle rifle
+   * 63, the bolt action 78 - so it stands in for calibre without any new
+   * plumbing, and a heavier weapon comes out slower, deeper and longer.
+   *
+   * The point is tactical, not decorative. Hearing that the contact two
+   * courtyards away is carrying something big is a reason to leave, and a
+   * reason the player can act on before they can see anything.
+   */
+  private playGunshot(
+    spatial: { gain: number; pan: number; cutoff: number },
+    intensity: number,
+    suppressed: boolean,
+    loudness = 45,
+  ): void {
     if (!this.ctx || !this.noiseBuffer) return;
-    const duration = suppressed ? 0.16 : 0.55;
+
+    // 0 at a pistol, 1 at the heaviest thing in the game.
+    const heft = clamp01((loudness - 20) / 60);
+
+    const duration = suppressed ? 0.16 : 0.42 + heft * 0.3;
     if (!this.canPlay(duration)) return;
 
     const t = this.now;
@@ -285,11 +283,12 @@ export class AudioEngine {
     // --- body ---------------------------------------------------------------
     const body = this.ctx.createBufferSource();
     body.buffer = this.noiseBuffer;
-    body.playbackRate.value = fxRng.range(0.75, 0.95);
+    // Heavier weapons play the noise slower, which drops the whole report.
+    body.playbackRate.value = fxRng.range(0.75, 0.95) * (1 - heft * 0.3);
     const bodyFilter = this.ctx.createBiquadFilter();
     bodyFilter.type = 'lowpass';
-    bodyFilter.frequency.setValueAtTime(suppressed ? 900 : 2600, t);
-    bodyFilter.frequency.exponentialRampToValueAtTime(180, t + duration * 0.7);
+    bodyFilter.frequency.setValueAtTime(suppressed ? 900 : 3200 - heft * 1100, t);
+    bodyFilter.frequency.exponentialRampToValueAtTime(180 - heft * 60, t + duration * 0.7);
     const bodyGain = this.ctx.createGain();
     bodyGain.gain.setValueAtTime(level * 0.9, t);
     bodyGain.gain.exponentialRampToValueAtTime(0.0001, t + duration);
@@ -303,10 +302,12 @@ export class AudioEngine {
     if (!suppressed && this.shortNoise) {
       const crack = this.ctx.createBufferSource();
       crack.buffer = this.shortNoise;
-      crack.playbackRate.value = fxRng.range(1.4, 2.0);
+      // The supersonic crack drops in pitch with the cartridge as well, so a
+      // heavy round reads as a slap rather than a snap.
+      crack.playbackRate.value = fxRng.range(1.4, 2.0) * (1 - heft * 0.28);
       const crackFilter = this.ctx.createBiquadFilter();
       crackFilter.type = 'highpass';
-      crackFilter.frequency.value = 1800;
+      crackFilter.frequency.value = 1800 - heft * 700;
       const crackGain = this.ctx.createGain();
       crackGain.gain.setValueAtTime(level * 0.8, t);
       crackGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);

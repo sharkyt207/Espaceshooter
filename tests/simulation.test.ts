@@ -23,6 +23,7 @@ import { createStack, stackValue, stackWeight } from '../src/inventory/ItemStack
 import { Inventory } from '../src/inventory/Inventory';
 import { HealthSystem } from '../src/health/HealthSystem';
 import { Player } from '../src/player/Player';
+import { spatialise, type ListenerState } from '../src/audio/Spatial';
 import {
   chamberFromMagazine,
   cycleRound,
@@ -1538,5 +1539,94 @@ describe('Vaulting', () => {
     // Full reverse on the stick, which would normally back the player off.
     player.update(1 / 60, map, 0, -1, false);
     assert.ok(player.x > firstX, 'the climb should carry through a reversed stick');
+  });
+});
+
+describe('Spatial audio', () => {
+  const listener = (angle = 0): ListenerState =>
+    ({ x: 0, y: 0, angle, hearingFactor: 1, deafness: 0 });
+
+  /** A shot at a bearing relative to a listener facing +x. */
+  const at = (bearing: number, dist = 12) =>
+    spatialise(listener(), Math.cos(bearing) * dist, Math.sin(bearing) * dist, 40, 0);
+
+  test('front and back are distinguishable, which panning alone cannot do', () => {
+    // The bug this whole module exists to fix: pan is the sine of the bearing,
+    // so a source dead ahead and one dead behind pan identically. Without a
+    // second cue the player cannot tell an approach from an ambush.
+    const ahead = at(0)!;
+    const behind = at(Math.PI)!;
+    assert.ok(ahead && behind, 'both should be audible at this range');
+
+    assert.ok(Math.abs(ahead.pan - behind.pan) < 0.01, 'pan genuinely cannot separate them');
+    assert.ok(
+      behind.cutoff < ahead.cutoff * 0.65,
+      `so timbre must: behind ${Math.round(behind.cutoff)} Hz vs ahead ${Math.round(ahead.cutoff)} Hz`,
+    );
+    assert.ok(behind.gain < ahead.gain, 'and the head shadows it slightly');
+  });
+
+  test('pan follows the bearing and picks the correct side', () => {
+    assert.ok(Math.abs(at(0)!.pan) < 0.01, 'dead ahead is centred');
+    assert.ok(at(Math.PI / 2)!.pan > 0.95, 'ninety degrees clockwise is hard right');
+    assert.ok(at(-Math.PI / 2)!.pan < -0.95, 'and anticlockwise is hard left');
+  });
+
+  test('facing reports the front-back axis for the HUD', () => {
+    assert.ok(at(0)!.facing > 0.99, 'ahead');
+    assert.ok(at(Math.PI)!.facing < -0.99, 'behind');
+    assert.ok(Math.abs(at(Math.PI / 2)!.facing) < 0.01, 'abeam');
+  });
+
+  test('the listener turning moves the sound, not the world', () => {
+    // A shot to the player's right must move to the left ear when they turn to
+    // face it - the bearing is relative, and getting that backwards would make
+    // turning towards a threat feel like turning away.
+    const source = { x: 0, y: 12 };
+    const facingAhead = spatialise(listener(0), source.x, source.y, 40, 0)!;
+    const facingIt = spatialise(listener(Math.PI / 2), source.x, source.y, 40, 0)!;
+    assert.ok(facingAhead.pan > 0.9, 'to the right while facing +x');
+    assert.ok(Math.abs(facingIt.pan) < 0.05, 'and centred once the player faces it');
+    assert.ok(facingIt.facing > 0.95, 'and reported as ahead');
+  });
+
+  test('distance costs level and brightness', () => {
+    const near = at(0, 4)!;
+    const far = at(0, 30)!;
+    assert.ok(far.gain < near.gain, 'further is quieter');
+    assert.ok(far.cutoff < near.cutoff, 'and duller - air eats the high end');
+  });
+
+  test('walls muffle without silencing', () => {
+    const clear = spatialise(listener(), 12, 0, 40, 0)!;
+    const walled = spatialise(listener(), 12, 0, 40, 0.9)!;
+    assert.ok(walled.gain < clear.gain * 0.5, 'a wall should cost most of the level');
+    assert.ok(walled.cutoff < clear.cutoff * 0.5, 'and most of the high end');
+    assert.ok(walled.gain > 0, 'but a muffled shot is still information');
+  });
+
+  test('sound beyond its range is dropped rather than played silently', () => {
+    assert.equal(spatialise(listener(), 500, 0, 40, 0), null);
+  });
+
+  test('deafness attenuates everything without breaking placement', () => {
+    const deaf: ListenerState = { x: 0, y: 0, angle: 0, hearingFactor: 1, deafness: 0.8 };
+    const normal = spatialise(listener(), 0, 12, 40, 0)!;
+    const stunned = spatialise(deaf, 0, 12, 40, 0)!;
+    assert.ok(stunned.gain < normal.gain * 0.4, 'a blast should cost hearing');
+    assert.ok(Math.abs(stunned.pan - normal.pan) < 0.01, 'but not which way it came from');
+  });
+
+  test('every field stays inside its range at any bearing and distance', () => {
+    for (let b = -Math.PI; b <= Math.PI; b += 0.21) {
+      for (const d of [0.5, 3, 12, 40]) {
+        const r = at(b, d);
+        if (!r) continue;
+        assert.ok(r.gain > 0 && r.gain <= 1.5, `gain ${r.gain} at bearing ${b}`);
+        assert.ok(r.pan >= -1 && r.pan <= 1, `pan ${r.pan} at bearing ${b}`);
+        assert.ok(r.cutoff >= 200 && r.cutoff <= 16000, `cutoff ${r.cutoff}`);
+        assert.ok(r.facing >= -1.001 && r.facing <= 1.001, `facing ${r.facing}`);
+      }
+    }
   });
 });
