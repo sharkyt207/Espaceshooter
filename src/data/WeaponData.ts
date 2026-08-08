@@ -78,7 +78,7 @@ const SPECS: WeaponSpec[] = [
   {
     id: 'wp_mpn9', cls: 'smg', name: 'MP-N9 Nadel', short: 'MP-N9', caliber: CALIBERS.P9,
     modes: ['single', 'auto'], rpm: 900, recoilV: 1.05, recoilH: 0.62, recovery: 15,
-    moa: 6.5, ergo: 0.42, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_9_30',
+    moa: 6.5, ergo: 0.33, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_9_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.2,
     loudness: 26, weight: 2.6, price: 26000, rarity: 'uncommon', w: 3, h: 2,
     desc: 'Hohe Kadenz, kaum Rückstoß. In engen Gängen kaum zu schlagen.',
@@ -86,7 +86,7 @@ const SPECS: WeaponSpec[] = [
   {
     id: 'wp_ks45', cls: 'smg', name: 'KS-45 Klamm', short: 'KS-45', caliber: CALIBERS.P45,
     modes: ['single', 'burst', 'auto'], rpm: 680, recoilV: 1.5, recoilH: 0.8, recovery: 13,
-    moa: 6.0, ergo: 0.46, reloadTac: 2.4, reloadEmpty: 3.1, mag: 'mag_45_25',
+    moa: 6.0, ergo: 0.38, reloadTac: 2.4, reloadEmpty: 3.1, mag: 'mag_45_25',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.22,
     loudness: 29, weight: 3.1, price: 34000, rarity: 'rare', w: 3, h: 2, burst: 3,
     desc: 'Schwerer Maschinenpistole im Großkaliber. Träge, aber durchschlagend.',
@@ -104,7 +104,7 @@ const SPECS: WeaponSpec[] = [
   {
     id: 'wp_ar556', cls: 'rifle', name: 'AR-556 Falke', short: 'AR-556', caliber: CALIBERS.R556,
     modes: ['single', 'burst', 'auto'], rpm: 780, recoilV: 2.05, recoilH: 0.88, recovery: 13.5,
-    moa: 2.4, ergo: 0.44, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_556_30',
+    moa: 2.4, ergo: 0.48, reloadTac: 2.3, reloadEmpty: 3.0, mag: 'mag_556_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.37,
     loudness: 43, weight: 3.2, price: 58000, rarity: 'uncommon', w: 4, h: 2, burst: 3,
     desc: 'Modulares Sturmgewehr mit ausgezeichneter Präzision. Empfindlich gegen Schmutz.',
@@ -112,7 +112,7 @@ const SPECS: WeaponSpec[] = [
   {
     id: 'wp_sk762', cls: 'battle', name: 'SK-762 Amboss', short: 'SK-762', caliber: CALIBERS.R762S,
     modes: ['single', 'auto'], rpm: 600, recoilV: 3.3, recoilH: 1.5, recovery: 9.5,
-    moa: 4.1, ergo: 0.56, reloadTac: 2.7, reloadEmpty: 3.6, mag: 'mag_762s_30',
+    moa: 4.1, ergo: 0.60, reloadTac: 2.7, reloadEmpty: 3.6, mag: 'mag_762s_30',
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.41,
     loudness: 48, weight: 3.8, price: 47000, rarity: 'uncommon', w: 4, h: 2,
     desc: 'Grobschlächtig und laut. Wer damit trifft, braucht keinen zweiten Schuss.',
@@ -158,7 +158,7 @@ const SPECS: WeaponSpec[] = [
   {
     id: 'wp_vs939', cls: 'smg', name: 'VS-939 Schatten', short: 'VS-939', caliber: CALIBERS.SUB9,
     modes: ['single', 'auto'], rpm: 700, recoilV: 1.8, recoilH: 0.7, recovery: 14,
-    moa: 3.0, ergo: 0.48, reloadTac: 2.5, reloadEmpty: 3.2, mag: 'mag_939_20',
+    moa: 3.0, ergo: 0.40, reloadTac: 2.5, reloadEmpty: 3.2, mag: 'mag_939_20',
     slots: ['optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.36,
     loudness: 13, weight: 3.4, price: 148000, rarity: 'epic', w: 4, h: 2,
     desc: 'Integral schallgedämpft. Unterschallmunition, kein Mündungsfeuer, kein Warnsignal.',
@@ -170,6 +170,46 @@ const SPECS: WeaponSpec[] = [
     slots: ['muzzle', 'optic', 'foregrip', 'stock', 'tactical'], barrel: 0.46,
     loudness: 50, weight: 7.8, price: 165000, rarity: 'epic', w: 5, h: 2,
     desc: 'Leichtes Maschinengewehr mit Gurtkasten. Sehr schwer, sehr laut, sehr endgültig.',
+  },
+
+  // --- carbines -----------------------------------------------------------
+  //
+  // The gap between an SMG and a full rifle. Short barrel, rifle cartridge:
+  // handles almost like a submachine gun indoors and still reaches past one
+  // outside. The trade is muzzle blast and a shorter sight radius, which is
+  // why they are loud and less accurate than their parent rifles rather than
+  // simply worse.
+  {
+    id: 'wp_kb545', cls: 'carbine', name: 'KB-545 Distel', short: 'KB-545', caliber: CALIBERS.R545,
+    modes: ['single', 'auto'], rpm: 720, recoilV: 2.6, recoilH: 1.15, recovery: 12.5,
+    moa: 4.6, ergo: 0.44, reloadTac: 2.2, reloadEmpty: 2.9, mag: 'mag_545_30',
+    slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.31,
+    loudness: 46, weight: 2.9, price: 61000, rarity: 'uncommon', w: 4, h: 2,
+    desc: 'Kurzlauf-Karabiner. Dreht sich im Treppenhaus wie eine MP und trägt trotzdem über den Hof.',
+  },
+  {
+    id: 'wp_kb556', cls: 'carbine', name: 'KB-556 Kiebitz', short: 'KB-556', caliber: CALIBERS.R556,
+    modes: ['single', 'burst', 'auto'], burst: 3, rpm: 800, recoilV: 2.35, recoilH: 0.95, recovery: 13.5,
+    moa: 4.0, ergo: 0.41, reloadTac: 2.0, reloadEmpty: 2.7, mag: 'mag_556_30',
+    slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine', 'tactical'], barrel: 0.29,
+    loudness: 48, weight: 2.7, price: 72000, rarity: 'rare', w: 4, h: 2,
+    desc: 'Leichter Karabiner mit Feuerstoß. Schnell im Anschlag, laut wie ein Schlag ins Gesicht.',
+  },
+
+  // --- bolt action --------------------------------------------------------
+  //
+  // The one weapon in the game that cannot correct a miss. Every shot works
+  // the bolt, which is a second and a half of standing still - so it rewards
+  // patience and position over reflexes, and it is the only reason to carry a
+  // sidearm you actually intend to use.
+  {
+    id: 'wp_zr762', cls: 'sniper', name: 'ZR-762 Distanz', short: 'ZR-762', caliber: CALIBERS.R762N,
+    modes: ['single'], rpm: 42, recoilV: 7.2, recoilH: 1.1, recovery: 7,
+    moa: 0.7, ergo: 0.95, reloadTac: 3.4, reloadEmpty: 4.4, mag: 'mag_762n_20',
+    slots: ['muzzle', 'optic', 'foregrip', 'stock', 'magazine'], barrel: 0.66,
+    loudness: 78, weight: 5.6, price: 186000, rarity: 'epic', w: 5, h: 2,
+    ironZoom: 1.05,
+    desc: 'Repetierer mit schwerem Lauf. Ein Schuss, dann Kammer öffnen - und in dieser Sekunde bist du nichts als ein Geräusch.',
   },
 ];
 

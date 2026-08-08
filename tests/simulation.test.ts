@@ -1327,3 +1327,114 @@ describe('Attachment recoil axes', () => {
     }
   });
 });
+
+describe('Arsenal', () => {
+  const weapons = ItemDB.ofCategory('weapon').filter((d) => d.weapon);
+
+  test('every weapon declares a handling class the pattern system knows', () => {
+    // A weapon whose class is not in the table silently falls back to the
+    // default pattern, which is the kind of miss that only shows up as "this
+    // gun feels like that other gun".
+    for (const def of weapons) {
+      const cls = def.weapon!.weaponClass;
+      assert.ok(cls, `${def.id} has no handling class`);
+      assert.ok(
+        PATTERN_BY_CLASS[cls],
+        `${def.id} has class "${cls}", which has no recoil pattern`,
+      );
+    }
+  });
+
+  test('the arsenal covers every role the game asks the player to choose between', () => {
+    const classes = new Set(weapons.map((d) => d.weapon!.weaponClass));
+    for (const required of ['pistol', 'smg', 'carbine', 'rifle', 'dmr', 'sniper', 'shotgun', 'lmg']) {
+      assert.ok(classes.has(required), `nothing in the arsenal fills the ${required} role`);
+    }
+  });
+
+  test('weapons of the same class are still distinguishable', () => {
+    // Two rifles that differ only in price are two entries, not two choices.
+    const byClass = new Map<string, typeof weapons>();
+    for (const def of weapons) {
+      const cls = def.weapon!.weaponClass;
+      byClass.set(cls, [...(byClass.get(cls) ?? []), def]);
+    }
+    for (const [cls, group] of byClass) {
+      if (group.length < 2) continue;
+      const fingerprints = new Set(
+        group.map((d) => {
+          const w = d.weapon!;
+          return [w.rpm, w.recoilVertical, w.accuracyMoa, w.ergonomics].join('|');
+        }),
+      );
+      assert.equal(
+        fingerprints.size, group.length,
+        `two ${cls} entries share the same handling numbers`,
+      );
+    }
+  });
+
+  test('the bolt action is genuinely slow to cycle', () => {
+    const bolt = ItemDB.get('wp_zr762').weapon!;
+    const dmr = ItemDB.get('wp_dm762').weapon!;
+    assert.ok(bolt.rpm < dmr.rpm * 0.4, 'a repeater must be far slower than a self-loader');
+    assert.ok(bolt.accuracyMoa < dmr.accuracyMoa, 'and buy something real with that time');
+  });
+
+  test('carbines sit between submachine guns and rifles', () => {
+    const carbine = ItemDB.get('wp_kb556').weapon!;
+    const smg = ItemDB.get('wp_mpn9').weapon!;
+    const rifle = ItemDB.get('wp_ar556').weapon!;
+    assert.ok(
+      carbine.ergonomics < rifle.ergonomics && carbine.ergonomics > smg.ergonomics,
+      'a carbine should handle between an SMG and a rifle',
+    );
+    assert.ok(
+      carbine.loudness > rifle.loudness,
+      'a short barrel on a rifle cartridge should be louder, not quieter',
+    );
+  });
+});
+
+describe('Handling ladder', () => {
+  /**
+   * Each weapon class should occupy its own band of handling speed.
+   *
+   * This is the property that makes a class a *choice*. When submachine guns
+   * and rifles overlap - which they did, at 0.42-0.48 against 0.44-0.50 -
+   * picking the SMG buys nothing it is supposed to buy, and the whole category
+   * collapses into "the rifle, but worse at range".
+   */
+  const worstOf = (cls: string): number => {
+    const group = ItemDB.ofCategory('weapon')
+      .filter((d) => d.weapon?.weaponClass === cls)
+      .map((d) => d.weapon!.ergonomics);
+    assert.ok(group.length > 0, `no weapons in class ${cls}`);
+    return Math.max(...group);
+  };
+  const bestOf = (cls: string): number => {
+    const group = ItemDB.ofCategory('weapon')
+      .filter((d) => d.weapon?.weaponClass === cls)
+      .map((d) => d.weapon!.ergonomics);
+    return Math.min(...group);
+  };
+
+  test('the classes form a ladder rather than a pile', () => {
+    // Lower is faster to bring up. Each rung must clear the one below it.
+    const ladder = ['pistol', 'smg', 'carbine', 'rifle'];
+    for (let i = 1; i < ladder.length; i++) {
+      const faster = ladder[i - 1];
+      const slower = ladder[i];
+      assert.ok(
+        worstOf(faster) < bestOf(slower),
+        `the slowest ${faster} (${worstOf(faster)}) should still beat the fastest ` +
+          `${slower} (${bestOf(slower)}) - otherwise the classes are not a choice`,
+      );
+    }
+  });
+
+  test('the heavy classes are genuinely heavy', () => {
+    assert.ok(bestOf('lmg') > worstOf('rifle'), 'an LMG must handle worse than any rifle');
+    assert.ok(bestOf('sniper') > worstOf('carbine'), 'a repeater must handle worse than a carbine');
+  });
+});

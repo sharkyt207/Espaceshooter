@@ -348,6 +348,24 @@ try {
   await page.waitForTimeout(400);
 
   // --- end the raid and debrief ---------------------------------------------
+  //
+  // The raid is live throughout this suite and the AI are perfectly capable of
+  // killing the player between two steps. That made the abandon flow fail at
+  // random - and a test that fails randomly is a test people learn to re-run
+  // rather than read.
+  //
+  // Healing here rather than guarding the assertion, because the point is to
+  // exercise the abandon path: skipping it when the player happens to have
+  // died would quietly stop testing it on exactly the runs where the game was
+  // most active.
+  await page.evaluate(() => {
+    const s = window.game.session;
+    if (!s) return;
+    for (const part of Object.values(s.player.health.parts)) part.hp = part.maxHp;
+    s.player.health.bleeding = 0;
+  });
+  await page.waitForTimeout(120);
+
   if ((await page.evaluate(() => window.game.state)) === 'raid') {
     await page.keyboard.press('Escape');
     await page.waitForTimeout(500);
