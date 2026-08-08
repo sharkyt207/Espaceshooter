@@ -94,24 +94,30 @@ export class MapScreen implements Screen {
     if (!session || !explored) return;
 
     const map = session.map;
-    // Render at an integer pixel scale so the grid stays crisp, then let CSS
-    // stretch the result to fill the panel. On a landscape phone the panel is
-    // much wider than it is tall, so rendering at the fitted pixel size would
-    // waste most of the screen; `image-rendering: pixelated` keeps the upscale
-    // sharp rather than blurry.
-    const scale = 4;
-    const w = map.width * scale;
-    const h = map.height * scale;
+    // Render at the size it will actually be shown at, in device pixels.
+    //
+    // This used to draw at a fixed four pixels per tile and let CSS resize the
+    // result, which was fine while the map was only coloured squares. It stops
+    // being fine the moment there is type on it: a 384px canvas resampled down
+    // to 294 drops roughly a quarter of every glyph, and `image-rendering:
+    // pixelated` makes that worse rather than better by refusing to blend.
+    //
+    // Matching the backing store to the display means the zone names are drawn
+    // once, at their real size, and never resampled.
+    const availableW = Math.max(160, window.innerWidth - 90);
+    const availableH = Math.max(120, window.innerHeight - 120);
+    const display = Math.min(availableW, availableH);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
+    const w = Math.round(display * dpr);
+    const h = Math.round((w * map.height) / map.width);
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    const availableW = Math.max(160, window.innerWidth - 90);
-    const availableH = Math.max(120, window.innerHeight - 120);
-    const display = Math.min(availableW, availableH);
+    const scale = w / map.width;
     this.canvas.style.width = `${display}px`;
-    this.canvas.style.height = `${(display * h) / w}px`;
+    this.canvas.style.height = `${(display * map.height) / map.width}px`;
 
     const ctx = this.ctx;
     ctx.fillStyle = cssVar('--bg-0');
@@ -134,6 +140,46 @@ export class MapScreen implements Screen {
         }
         ctx.fillStyle = color;
         ctx.fillRect(x * scale, y * scale, scale, scale);
+      }
+    }
+
+    // --- zone ratings --------------------------------------------------------
+    //
+    // The whole risk-reward loop runs on zone danger: it sets loot rarity, how
+    // many hostiles spawn and how good they are. All of that machinery existed
+    // and none of it was visible, so "go deeper for better loot" was something
+    // a player could only discover by dying in the wrong place. A decision the
+    // player cannot see the terms of is not a decision.
+    //
+    // Ratings are shown for every zone, explored or not, on purpose. This is a
+    // briefed operation - you would know a sector's reputation before going in
+    // - and it is the *contents* that exploration reveals, not the reputation.
+    // Hiding the rating would not create tension, only ignorance.
+    for (const zone of map.zones) {
+      const x = zone.x0 * scale;
+      const y = zone.y0 * scale;
+      const zw = (zone.x1 - zone.x0 + 1) * scale;
+      const zh = (zone.y1 - zone.y0 + 1) * scale;
+
+      // A wash whose weight follows the danger, so the hot parts of the map
+      // read at a glance without any of it being unreadable.
+      const heat = Math.min(1, zone.danger);
+      ctx.fillStyle = `rgba(196, 74, 52, ${0.05 + heat * 0.20})`;
+      ctx.fillRect(x, y, zw, zh);
+      ctx.strokeStyle = `rgba(196, 74, 52, ${0.16 + heat * 0.34})`;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, zw - 1, zh - 1);
+
+      // Name and rating, but only where the zone is big enough to carry them.
+      // A label spilling past its own zone points at the wrong place, which is
+      // worse than no label.
+      if (zw > scale * 12 && zh > scale * 6) {
+        const font = Math.max(8, Math.min(13, scale * 2));
+        ctx.font = `${font}px sans-serif`;
+        ctx.fillStyle = cssVar('--text-dim');
+        ctx.fillText(zone.name, x + 4, y + font + 2);
+        ctx.fillStyle = heat > 0.6 ? cssVar('--bad') : heat > 0.35 ? cssVar('--warn') : cssVar('--text-faint');
+        ctx.fillText(dangerLabel(zone.danger), x + 4, y + font * 2 + 4);
       }
     }
 
@@ -196,4 +242,18 @@ function countExplored(explored: Uint8Array): number {
   let n = 0;
   for (let i = 0; i < explored.length; i++) n += explored[i];
   return n;
+}
+
+/**
+ * A zone's danger as words rather than a number.
+ *
+ * Four steps, because that is as many distinctions as a player can act on
+ * while moving: two would not separate "worth it" from "not", and a percentage
+ * would invite arithmetic nobody does mid-raid.
+ */
+function dangerLabel(danger: number): string {
+  if (danger >= 0.75) return 'Sehr gefährlich · beste Beute';
+  if (danger >= 0.5) return 'Gefährlich · gute Beute';
+  if (danger >= 0.32) return 'Umkämpft';
+  return 'Ruhig · wenig zu holen';
 }

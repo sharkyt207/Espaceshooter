@@ -1542,7 +1542,9 @@ html, body {
   background: var(--bg-0);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  image-rendering: pixelated;
+  /* No `image-rendering: pixelated` here any more. The canvas is drawn at the
+     size it is displayed at, so there is nothing to resample - and refusing to
+     blend would only harden the edges of the zone names. */
 }
 
 /* ==========================================================================

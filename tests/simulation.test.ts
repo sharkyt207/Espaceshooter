@@ -32,6 +32,7 @@ import {
   totalRounds,
 } from '../src/weapons/WeaponRuntime';
 import { LootSystem } from '../src/loot/LootSystem';
+import { LOOT_TABLES } from '../src/loot/LootTables';
 import { Progression } from '../src/meta/Progression';
 import { Hideout } from '../src/meta/Hideout';
 import { QuestSystem } from '../src/meta/Quests';
@@ -1627,6 +1628,89 @@ describe('Spatial audio', () => {
         assert.ok(r.cutoff >= 200 && r.cutoff <= 16000, `cutoff ${r.cutoff}`);
         assert.ok(r.facing >= -1.001 && r.facing <= 1.001, `facing ${r.facing}`);
       }
+    }
+  });
+});
+
+describe('Risk and reward', () => {
+  /**
+   * The loop the whole game is built on: deeper means richer means more
+   * dangerous. Every part of that runs off `zone.danger`, so these check the
+   * chain actually holds on generated maps rather than only in principle.
+   */
+  const maps = MAP_BLUEPRINTS.map((bp) => generateMap(bp, 20250805));
+
+  test('every map offers a real spread of danger, not one flat rating', () => {
+    for (const gen of maps) {
+      const dangers = gen.map.zones.map((z) => z.danger);
+      assert.ok(dangers.length >= 3, `${gen.blueprintId} has too few zones to choose between`);
+      const spread = Math.max(...dangers) - Math.min(...dangers);
+      assert.ok(
+        spread > 0.3,
+        `${gen.blueprintId} zones run ${Math.min(...dangers)}..${Math.max(...dangers)} - ` +
+          `too flat for the player to be choosing anything`,
+      );
+    }
+  });
+
+  test('there is somewhere safe to start and somewhere worth the risk', () => {
+    for (const gen of maps) {
+      const dangers = gen.map.zones.map((z) => z.danger);
+      assert.ok(Math.min(...dangers) <= 0.3, `${gen.blueprintId} has no low-risk band to get bearings in`);
+      assert.ok(Math.max(...dangers) >= 0.7, `${gen.blueprintId} has no high-value core to push for`);
+    }
+  });
+
+  test('danger buys better loot', () => {
+    // Sampled rather than asserted per-container: the roll is random, so the
+    // claim is about the distribution, and a single draw proves nothing.
+    //
+    // A table the game actually ships, not one invented here. A fabricated
+    // table tests the sampler against itself; this tests the loot the player
+    // will really open.
+    const table = LOOT_TABLES.weapon_crate ?? Object.values(LOOT_TABLES)[0];
+    const loot = new LootSystem(4242);
+
+    const valueAt = (danger: number): number => {
+      let total = 0;
+      for (let i = 0; i < 220; i++) {
+        const container = loot.createContainer(table, 5, 5, danger);
+        for (const slot of container.grid.slots) total += stackValue(slot.stack);
+      }
+      return total;
+    };
+
+    const quiet = valueAt(0.15);
+    const hot = valueAt(0.95);
+    assert.ok(
+      hot > quiet * 1.25,
+      `high-danger zones must pay measurably better (quiet ${quiet}, hot ${hot})`,
+    );
+  });
+
+  test('danger also buys trouble', () => {
+    for (const gen of maps) {
+      // Spawns are rejection-sampled against zone danger, so the hot zones
+      // should hold a disproportionate share of the hostiles.
+      const hot = gen.map.zones.filter((z) => z.danger >= 0.6);
+      const calm = gen.map.zones.filter((z) => z.danger <= 0.3);
+      if (hot.length === 0 || calm.length === 0) continue;
+
+      const inZones = (zones: typeof hot): number =>
+        gen.aiSpawns.filter((s) =>
+          zones.some((z) => s.x >= z.x0 && s.x <= z.x1 && s.y >= z.y0 && s.y <= z.y1),
+        ).length;
+
+      const hotArea = hot.reduce((a, z) => a + (z.x1 - z.x0 + 1) * (z.y1 - z.y0 + 1), 0);
+      const calmArea = calm.reduce((a, z) => a + (z.x1 - z.x0 + 1) * (z.y1 - z.y0 + 1), 0);
+      const hotDensity = inZones(hot) / Math.max(1, hotArea);
+      const calmDensity = inZones(calm) / Math.max(1, calmArea);
+
+      assert.ok(
+        hotDensity > calmDensity,
+        `${gen.blueprintId}: hostiles should crowd the valuable ground ` +
+          `(hot ${hotDensity.toFixed(5)}/tile, calm ${calmDensity.toFixed(5)}/tile)`,
+      );
     }
   });
 });
