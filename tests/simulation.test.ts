@@ -1218,6 +1218,61 @@ describe('Locations feel different', () => {
     );
   });
 
+  test('the new locations own an axis of their own', () => {
+    // The harbour, depot and works are separated by sightline. The other two
+    // deliberately are not - they would sit on top of the depot and the works
+    // on that measure - so they have to earn their place on a different axis,
+    // or they are reskins.
+    const indoorShare = (id: string): number => {
+      const bp = MAP_BLUEPRINTS.find((b) => b.id === id)!;
+      let floor = 0;
+      let roofed = 0;
+      for (let seed = 1; seed <= 4; seed++) {
+        const map = generateMap(bp, seed).map;
+        for (let i = 0; i < map.width * map.height; i++) {
+          if (map.tiles[i] !== Tile.Floor) continue;
+          floor++;
+          if (map.ceiling[i]) roofed++;
+        }
+      }
+      return roofed / Math.max(1, floor);
+    };
+
+    // The Klaerwerk is fought indoors: roughly a third of its walkable floor
+    // is under a roof, against about a seventh at the harbour and depot.
+    const filter = indoorShare('filter');
+    assert.ok(
+      filter > indoorShare('harbour') * 1.8 && filter > indoorShare('depot') * 1.8,
+      `the Klaerwerk should be substantially more interior than the open ` +
+        `locations (${(filter * 100).toFixed(0)} % roofed)`,
+    );
+    // And dark enough that the torch stops being optional.
+    const filterBp = MAP_BLUEPRINTS.find((b) => b.id === 'filter')!;
+    const harbourBp = MAP_BLUEPRINTS.find((b) => b.id === 'harbour')!;
+    assert.ok(
+      filterBp.ambient < harbourBp.ambient * 0.6,
+      `the Klaerwerk should be markedly darker (${filterBp.ambient} vs ${harbourBp.ambient})`,
+    );
+
+    // The Verladehof is the risk/reward extreme rather than a geometric one:
+    // hostiles per tile, and a clock short enough that clearing is not on the
+    // table.
+    const density = (id: string): number => {
+      const bp = MAP_BLUEPRINTS.find((b) => b.id === id)!;
+      return bp.aiCount / (bp.width * bp.height);
+    };
+    assert.ok(
+      density('yard') > density('harbour') * 2.5,
+      `the Verladehof should be far denser than the harbour ` +
+        `(${(density('yard') * 1000).toFixed(1)} vs ${(density('harbour') * 1000).toFixed(1)} per 1000 tiles)`,
+    );
+    const yardBp = MAP_BLUEPRINTS.find((b) => b.id === 'yard')!;
+    assert.ok(
+      yardBp.raidSeconds <= 8 * 60,
+      `the Verladehof's clock has to be the pressure (${yardBp.raidSeconds / 60} min)`,
+    );
+  });
+
   test('every location still has room to fight in', () => {
     // The counterweight. Driving clutter up to make a place feel tight is easy
     // and would eventually produce a map that is impassable rather than
@@ -2010,27 +2065,61 @@ describe('Risk and reward', () => {
   });
 
   test('danger also buys trouble', () => {
-    for (const gen of maps) {
-      // Spawns are rejection-sampled against zone danger, so the hot zones
-      // should hold a disproportionate share of the hostiles.
-      const hot = gen.map.zones.filter((z) => z.danger >= 0.6);
-      const calm = gen.map.zones.filter((z) => z.danger <= 0.3);
-      if (hot.length === 0 || calm.length === 0) continue;
+    // The valuable ground has to be the crowded ground. That is the sentence
+    // the whole loop rests on, and it took three attempts to state in a way
+    // that measures it rather than something adjacent.
+    //
+    // Not a hot-versus-calm bucket split: the zones overlap by design - the
+    // outer ring covers the entire map and every building sits inside it - so
+    // thresholding dropped mid-danger buildings into the "calm" pile, and the
+    // buckets moved as soon as a blueprint asked for more buildings. It was
+    // measuring the zone table's shape, not the spawner.
+    //
+    // Not mean danger under all spawns either. Three quarters of any location
+    // is low-danger open ground, so that average is dominated by ground nobody
+    // is arguing about and moves by five per cent when the effect is real.
+    //
+    // The top-value zone's share of hostiles against its share of walkable
+    // ground is the question as a player would put it: is the good stuff
+    // guarded? Pooled over eight seeds, because a single raid has fourteen to
+    // twenty-two hostiles across five to nine zones and per-zone counts run
+    // 0, 2, 0, 6 - real bias, useless sample.
+    for (const bp of MAP_BLUEPRINTS) {
+      let topGround = 0;
+      let ground = 0;
+      let topSpawns = 0;
+      let spawns = 0;
 
-      const inZones = (zones: typeof hot): number =>
-        gen.aiSpawns.filter((s) =>
-          zones.some((z) => s.x >= z.x0 && s.x <= z.x1 && s.y >= z.y0 && s.y <= z.y1),
-        ).length;
+      for (let seed = 1; seed <= 8; seed++) {
+        const gen = generateMap(bp, seed);
+        const map = gen.map;
+        const top = Math.max(...map.zones.map((z) => z.danger));
+        const isTop = (x: number, y: number): boolean =>
+          (map.zoneAt(Math.floor(x), Math.floor(y))?.danger ?? 0) >= top - 1e-6;
 
-      const hotArea = hot.reduce((a, z) => a + (z.x1 - z.x0 + 1) * (z.y1 - z.y0 + 1), 0);
-      const calmArea = calm.reduce((a, z) => a + (z.x1 - z.x0 + 1) * (z.y1 - z.y0 + 1), 0);
-      const hotDensity = inZones(hot) / Math.max(1, hotArea);
-      const calmDensity = inZones(calm) / Math.max(1, calmArea);
+        for (let y = 1; y < map.height - 1; y++) {
+          for (let x = 1; x < map.width - 1; x++) {
+            if (map.isSolid(x, y)) continue;
+            ground++;
+            if (isTop(x, y)) topGround++;
+          }
+        }
+        for (const spawn of gen.aiSpawns) {
+          spawns++;
+          if (isTop(spawn.x, spawn.y)) topSpawns++;
+        }
+      }
+
+      const groundShare = topGround / Math.max(1, ground);
+      const spawnShare = topSpawns / Math.max(1, spawns);
+      const concentration = spawnShare / Math.max(1e-9, groundShare);
 
       assert.ok(
-        hotDensity > calmDensity,
-        `${gen.blueprintId}: hostiles should crowd the valuable ground ` +
-          `(hot ${hotDensity.toFixed(5)}/tile, calm ${calmDensity.toFixed(5)}/tile)`,
+        concentration > 1.4,
+        `${bp.id}: the most valuable zone should be guarded - it holds ` +
+          `${(groundShare * 100).toFixed(1)} % of the walkable ground but only ` +
+          `${(spawnShare * 100).toFixed(1)} % of ${spawns} hostiles ` +
+          `(${concentration.toFixed(2)}x, wanted > 1.4x)`,
       );
     }
   });

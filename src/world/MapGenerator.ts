@@ -138,6 +138,16 @@ export interface MapBlueprint {
   raidSeconds: number;
   /** AI population target for the location. */
   aiCount: number;
+  /**
+   * One line telling the player what kind of place this is.
+   *
+   * The locations carry real, measured differences - sightlines from 4.7 to
+   * 14.1 tiles, roofed floor from 14 % to a third, hostile density varying
+   * threefold - and none of that was visible before choosing. A player only
+   * finds out what a place is by dying in it once, which is a poor way to
+   * learn that their scope is dead weight.
+   */
+  character: string;
   hasBoss: boolean;
   bossName: string;
 }
@@ -534,12 +544,25 @@ function buildZones(map: TileMap, buildings: Rect[], bp: MapBlueprint): void {
     danger: 0.25, interior: false,
   });
   const names = ['Lagerhalle', 'Verwaltung', 'Werkhalle', 'Umschlagpunkt', 'Kesselhaus'];
+  // The first (largest) building is the map's high-value contested space, and
+  // the rest ramp up towards it without ever passing it.
+  //
+  // This used to read `0.5 + i * 0.05`, which is unbounded: the ninth building
+  // scored 0.90 and the fourteenth 1.15, so on a dense location the *last*
+  // structure placed outranked the anchor. Nothing caught it while no
+  // blueprint asked for more than five buildings. Adding one that asks for
+  // fourteen inverted the map's risk gradient - hostiles thinned out on the
+  // valuable ground instead of crowding it - which is the one relationship the
+  // whole loop is built on, so it failed the risk/reward test rather than
+  // shipping quietly.
+  //
+  // Expressed as a fraction of the count now, so it holds at any density.
+  const secondaryCount = Math.max(1, buildings.length - 1);
   buildings.forEach((b, i) => {
     map.addZone({
       name: names[i % names.length],
       x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
-      // The first (largest) building is the map's high-value contested space.
-      danger: i === 0 ? 0.9 : 0.5 + i * 0.05,
+      danger: i === 0 ? 0.9 : 0.35 + (i / secondaryCount) * 0.35,
       interior: true,
     });
   });
@@ -869,7 +892,19 @@ function buildSpawns(
     if (tooClose) continue;
     const zone = map.zoneAt(x, y);
     // Rejection-sample against zone danger so hot areas get more contacts.
-    if (!rng.chance(0.35 + (zone?.danger ?? 0.25) * 0.65)) continue;
+    //
+    // Squared, and starting from a low floor. The linear version was
+    // `0.35 + danger * 0.65`, which spans 0.51 to 0.94 - a 1.8x preference,
+    // and measurement said that was not enough to survive everything else
+    // competing for these samples. Pooled over eight seeds, the top-value zone
+    // was taking 0.67x and 0.83x of its fair share of hostiles on two of the
+    // five locations: the map's most valuable ground was its *emptiest*, which
+    // inverts the one relationship the whole loop rests on.
+    //
+    // Squaring pulls the low end down without touching the top, giving about a
+    // 4x preference, which measures through.
+    const danger = zone?.danger ?? 0.25;
+    if (!rng.chance(0.15 + danger * danger * 0.85)) continue;
     out.aiSpawns.push({ x: x + 0.5, y: y + 0.5, angle: rng.range(0, Math.PI * 2), tag: 'ai' });
   }
 }

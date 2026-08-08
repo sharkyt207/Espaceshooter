@@ -30,6 +30,8 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     ambient: 0.66,
     raidSeconds: 25 * 60,
     aiCount: 22,
+    character:
+      'Weite Betonflächen zwischen wenigen großen Hallen. Lange Schusslinien - ein Zielfernrohr trägt sein Gewicht.',
     hasBoss: true,
     bossName: 'Kommandant Vasska',
   },
@@ -48,6 +50,8 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     ambient: 0.52,
     raidSeconds: 18 * 60,
     aiCount: 18,
+    character:
+      'Gemischte Entfernungen, nichts davon extrem. Der Ort zum Herantasten.',
     hasBoss: false,
     bossName: '',
   },
@@ -67,6 +71,59 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     ambient: 0.38,
     raidSeconds: 14 * 60,
     aiCount: 14,
+    character:
+      'Enge Gassen, Ecken überall. Kurze Waffen und Gehör entscheiden.',
+    hasBoss: false,
+    bossName: '',
+  },
+  {
+    id: 'filter',
+    displayName: 'Klaerwerk Ost',
+    width: 62,
+    height: 62,
+    // Fourteen structures on a small plot: the location is fought *through*
+    // buildings rather than across a yard. Roughly 37 % of the walkable floor
+    // sits under a roof against 14 % at the harbour, which is the highest the
+    // generator reaches - past about fourteen buildings the placer runs out of
+    // room and further ones simply fail, so this is the ceiling rather than an
+    // arbitrary number.
+    buildings: 14,
+    containerYards: 1,
+    clutter: 0.8,
+    structureScale: 1.1,
+    water: true,
+    // Dark. Indoors most of the time and overcast when outside, so the torch
+    // stops being an option and becomes equipment - and every enemy who has
+    // one announces themselves the same way.
+    ambient: 0.24,
+    raidSeconds: 16 * 60,
+    aiCount: 16,
+    character:
+      'Wird drinnen ausgetragen und liegt im Dunkeln. Ohne Lampe sieht man nichts - mit Lampe sieht dich jeder.',
+    hasBoss: false,
+    bossName: '',
+  },
+  {
+    id: 'yard',
+    displayName: 'Verladehof 3',
+    // The risk/reward extreme rather than a geometric one. Half the area of
+    // the works with more hostiles in it - about 0.0074 per tile against
+    // 0.0024 at the harbour, three times the pressure - and eight minutes to
+    // do something about it. There is no version of this raid where the player
+    // clears the map; the question is what they can reach and still get out
+    // with, which is the whole loop stated in one location.
+    width: 52,
+    height: 52,
+    buildings: 5,
+    containerYards: 4,
+    clutter: 1.4,
+    structureScale: 0.9,
+    water: false,
+    ambient: 0.58,
+    raidSeconds: 8 * 60,
+    aiCount: 20,
+    character:
+      'Klein, überfüllt, acht Minuten. Aufräumen ist keine Option - nimm, was du erreichst, und verschwinde.',
     hasBoss: false,
     bossName: '',
   },

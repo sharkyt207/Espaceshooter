@@ -123,21 +123,56 @@ Spieler fühlt, ohne sie benennen zu können: sie entscheidet, ob ein Zielfernro
 sein Gewicht wert ist und ob das Überqueren offener Fläche eine Entscheidung
 ist oder ein Spaziergang.
 
-| Ort | Sicht draußen | über 5 Seeds |
-|---|---|---|
-| Hafenbecken 7 | 14,1 | 12,3 – 15,1 |
-| Umschlagdepot | 7,5 | 6,9 – 8,2 |
-| Kesselhaus West | 4,7 | 4,6 – 5,0 |
+| Ort | Sicht draußen | über Seeds | innen | Gegner/1000 Kacheln | Dauer |
+|---|---|---|---|---|---|
+| Hafenbecken 7 | 14,0 | 12,3 – 15,1 | 14 % | 2,4 | 25 min |
+| Umschlagdepot Nord | 7,6 | 6,9 – 8,2 | 14 % | 3,0 | 18 min |
+| Klärwerk Ost | 8,0 | 7,6 – 8,3 | 33 % | 4,2 | 16 min |
+| Verladehof 3 | 5,9 | 5,6 – 6,2 | 28 % | 7,4 | 8 min |
+| Kesselhaus West | 4,7 | 4,6 – 5,0 | 27 % | 3,2 | 14 min |
 
-Entscheidend ist die dritte Spalte: **die Seed-Streuung überlappt nicht mehr
-mit dem Abstand zwischen den Orten.** Ein Ort ist jetzt unabhängig vom Seed
-wiedererkennbar, und genau das war vorher nicht so.
+Entscheidend bei den ersten dreien ist die dritte Spalte: **die Seed-Streuung
+überlappt nicht mehr mit dem Abstand zwischen den Orten.** Ein Ort ist
+unabhängig vom Seed wiedererkennbar, und genau das war vorher nicht so.
+
+Die beiden neuen liegen bewusst *nicht* auf der Sichtachse — dort säßen sie auf
+dem Depot und dem Kesselhaus. Sie besitzen eine eigene: das **Klärwerk** wird
+drinnen ausgetragen (33 % überdachte Bodenfläche gegen 14 %) und liegt im
+Dunkeln, der **Verladehof** ist die Risiko-Achse (dreifache Gegnerdichte, acht
+Minuten). Jede dieser Behauptungen ist als Test formuliert, damit sie beim
+nächsten Balancing nicht stillschweigend verloren geht.
+
+Was jeder Ort ist, steht jetzt auch auf seiner Karte im Einsatzplaner. Vorher
+erfuhr man es, indem man dort einmal starb — eine schlechte Art zu lernen, dass
+das Zielfernrohr die falsche Wahl war.
 
 Der wirksame Hebel ist `clutter` (11,1 → 4,6 über seinen Bereich). Ich hatte
 zuerst einen `structureSpacing`-Parameter eingebaut, in der Annahme, der Abstand
 zwischen Strukturen sei ausschlaggebend — gemessen bewegte er die Zahl von 7,3
 auf 8,3 über den Bereich 2 bis 12 Kacheln. Vierzehn Prozent für einen Regler,
 der aussieht, als forme er die Karte um. Er ist wieder draußen.
+
+### Ein Fehler, den erst der fünfte Ort sichtbar machte
+
+Die Gefahrenstufe einer Gebäudezone war `0.5 + i * 0.05` — **unbegrenzt**. Das
+neunte Gebäude erreichte 0,90, das vierzehnte 1,15, überholte also das
+Hauptgebäude. Solange kein Bauplan mehr als fünf Gebäude verlangte, fiel das nie
+auf. Das Klärwerk mit vierzehn drehte den Risikogradienten der Karte um: auf dem
+wertvollsten Boden standen *weniger* Gegner statt mehr.
+
+Beim Nachmessen zeigte sich, dass die Verzerrung im Spawner ohnehin zu schwach
+war. Die Spitzenzone bekam auf zwei der fünf Orte nur 0,67× und 0,83× ihres
+Flächenanteils an Gegnern — die wertvollste Fläche der Karte war ihre leerste,
+also genau die Umkehrung dessen, worauf die ganze Schleife beruht. Die Annahme
+wurde quadriert (`0.15 + Gefahr² · 0.85`, rund vierfache Bevorzugung statt
+1,8-facher); jetzt liegen alle fünf Orte zwischen 1,7× und 3,3×.
+
+Der Test dazu brauchte drei Anläufe und jeder Fehlversuch steht im Quelltext:
+ein Heiß-gegen-Ruhig-Vergleich maß die Form der Zonentabelle statt den Spawner
+(die Zonen überlappen absichtlich), der Mittelwert über alle Spawns wurde von
+den drei Vierteln unstrittigen Bodens erdrückt, und die erste brauchbare Fassung
+behauptete eine statistische Eigenschaft aus einer einzigen Stichprobe von
+sechzehn Gegnern.
 
 ---
 
@@ -211,9 +246,9 @@ für das Compositing etwa 100 ms je Bild.
 | Laufzeitabhängigkeiten | 0 |
 | Waffen / Munition / Anbauteile | 16 / 42 / 34 |
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
-| Karten | 3 (96², 78², 66²) |
+| Karten | 5 (96² bis 52²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 151 |
+| Simulationstests | 152 |
 
 ---
 
@@ -221,7 +256,7 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 151 Simulationstests, ohne Browser |
+| `npm test` | 152 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
 | `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |
@@ -244,10 +279,12 @@ Ehrlich, und nach Gewicht sortiert.
    verifizieren ließe, und ungetesteten Portcode zu schreiben hieße, Arbeit zu
    liefern, die niemand geprüft hat.
 
-2. **Drei Karten sind für eine Extraktions-Schleife wenig.** Sie unterscheiden
-   sich seit diesem Durchgang aber wenigstens *spürbar* voneinander (siehe
-   unten); vorher taten sie das nicht. Weitere Orte sind jetzt billig, weil der
-   Bauplan tatsächlich Charakter steuert statt nur Größe.
+2. **Fünf Karten sind für eine Extraktions-Schleife immer noch nicht viel.**
+   Sie unterscheiden sich seit diesem Durchgang aber messbar (siehe unten), und
+   das Nachlegen ist jetzt billig, weil der Bauplan Charakter steuert statt nur
+   Größe. Die Obergrenze des Generators für Innenräume liegt bei rund einem
+   Drittel der begehbaren Fläche — ein Ort, der fast vollständig innen spielt,
+   bräuchte einen anderen Erzeuger.
 
 3. **Die Prüfumgebung hat keine echte GPU.** Alle Grafikaussagen stammen von
    SwiftShader. Struktur und Übereinstimmung der Renderer sind damit belegt,

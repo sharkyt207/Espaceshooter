@@ -67,6 +67,16 @@ export class DeployScreen implements Screen {
               `${blueprint.aiCount} gemeldete Feindkräfte` +
               (blueprint.hasBoss ? ` · ${blueprint.bossName}` : ''),
           }),
+          // What kind of place this is, in one line. The locations differ by
+          // measured amounts - sightlines from 4.7 to 14.1 tiles, hostile
+          // density threefold - and without this the player finds that out by
+          // dying in one, which is a poor way to learn a scope was the wrong
+          // choice.
+          el('div', {
+            class: 'sub',
+            style: { color: 'var(--text-faint)', marginTop: '2px' },
+            text: blueprint.character,
+          }),
         ]),
         selected ? el('span', { class: 'tag', style: { borderColor: 'var(--accent)', color: 'var(--accent)' }, text: 'Gewählt' }) : null,
       ].filter(Boolean) as HTMLElement[]);
