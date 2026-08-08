@@ -1162,6 +1162,27 @@ export class RaidRenderer {
   get internalResolution(): string {
     return `${this.internalWidth}x${this.internalHeight}`;
   }
+
+  /**
+   * How much effect work this device should be asked to do, 0.35 .. 1.
+   *
+   * Derived from the render scale the governor has settled on, because that is
+   * the one number in the engine that reflects measured frame time rather than
+   * a guess about the hardware. A phone that has been pushed down to 45 %
+   * resolution is a phone that should not also be spawning four hundred
+   * particles per burst.
+   *
+   * Deliberately gentler than the resolution cut: resolution is quadratic in
+   * cost, so halving it saves far more than halving particle counts would, and
+   * effects are load-bearing for readability - blood tells you that you hit,
+   * impact dust tells you that you missed. Cutting them to nothing to save a
+   * millisecond trades information the player needs for frames they will not
+   * notice. The floor keeps every effect visible, just thinner.
+   */
+  get effectQuality(): number {
+    const scale = this.fixedScale > 0 ? this.fixedScale : this.governor.scale;
+    return Math.max(0.35, Math.min(1, 0.35 + (scale - 0.45) * 1.18));
+  }
 }
 
 /** Blend two #rrggbb colours. `t` of 0 is `a`, 1 is `b`. */

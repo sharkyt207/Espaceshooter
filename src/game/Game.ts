@@ -203,8 +203,6 @@ export class Game {
       }
       this.hud.setVisible(this.state === 'raid' && !top);
     };
-
-    this.hud.onInteract = () => this.tryInteract();
   }
 
   private wireEvents(): void {
@@ -593,6 +591,13 @@ export class Game {
       this.screens.tick(dt);
       this.consumeMenuActions();
     }
+
+    // Particle budget follows measured frame time. `EffectSystem.quality` has
+    // always documented itself as "lowered by the performance governor" and
+    // nothing ever lowered it, so every device spawned the full count no
+    // matter how badly it was coping - the one effects lever in the engine,
+    // built and never connected.
+    session.effects.quality = this.renderer.effectQuality;
 
     session.update(dt);
     this.mapScreen.reveal(session);

@@ -47,8 +47,14 @@ export class Loop {
 
   /** Wall-clock seconds of simulated time since start (pauses excluded). */
   elapsed = 0;
-  /** Global time multiplier. 0 = paused, used by menus and the death screen. */
-  timeScale = 1;
+
+  // There was a `timeScale` here, documented as "0 = paused, used by menus and
+  // the death screen". Nothing ever assigned it, and nothing should have: the
+  // world deliberately keeps running while a menu is open, because looting
+  // under a running raid clock is the tension the whole loop is built on. A
+  // knob that cannot be turned, described as being turned by two screens that
+  // do not turn it, is worse than no knob - it is the kind of comment that
+  // makes a reader stop looking for the bug.
 
   constructor(opts: LoopOptions) {
     this.tickRate = opts.tickRate ?? 60;
@@ -91,7 +97,7 @@ export class Loop {
     const fpsSample = frameTime > 0 ? 1 / frameTime : 0;
     this.stats.fps += (fpsSample - this.stats.fps) * 0.05;
 
-    this.accumulator += frameTime * this.timeScale;
+    this.accumulator += frameTime;
 
     let ticks = 0;
     const simStart = performance.now();

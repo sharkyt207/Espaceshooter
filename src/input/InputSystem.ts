@@ -165,15 +165,17 @@ export class InputSystem {
   /** Visual state for the on-screen stick, consumed by the HUD. */
   readonly stickVisual = { active: false, originX: 0, originY: 0, knobX: 0, knobY: 0 };
 
-  /** True once any touch has been seen - used to hide desktop hints. */
-  touchDetected = false;
+  // A `touchDetected` flag lived here, "used to hide desktop hints". It was
+  // set on the first touch and read nowhere, because there are no desktop
+  // hints - the feature it served was never built. The touch layer is always
+  // present by design; a player who does not want it sets any button's size or
+  // opacity to zero in the controls screen, which removes it and its touch
+  // target together.
 
   attach(surface: HTMLElement): void {
     this.surface = surface;
 
     const onPointerDown = (e: PointerEvent): void => {
-      if (e.pointerType === 'touch') this.touchDetected = true;
-
       // Never claim a pointer that started on the UI. Without this the
       // surface's pointer capture swallows the rest of the gesture and the
       // button never receives its press - which silently breaks every menu on

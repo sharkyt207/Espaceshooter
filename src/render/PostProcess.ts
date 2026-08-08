@@ -50,6 +50,37 @@ export interface PostSettings {
   grade: GradeSpec;
 }
 
+/**
+ * The filmic response curve, shared with the GPU path.
+ *
+ * This has to be the same shape in both renderers, and for a long time it was
+ * not. The shader used this curve; the software path used a Reinhard variant
+ * whose comment claimed it "keeps mid-tones almost unchanged". It did not - at
+ * mid grey the two disagreed by nearly a factor of two, and the measured
+ * result was a software frame 44 % darker than the GPU frame of the identical
+ * scene. A player whose phone fell back to the raycaster was playing a
+ * different, darker game, and on a night raid that is not a cosmetic
+ * difference: it decides what you can see.
+ *
+ * Nothing caught it because the renderer comparison only ranked cells by
+ * brightness, and a uniform darkening preserves every ranking perfectly.
+ *
+ * Duplicated as source rather than shared, because the other copy lives in
+ * GLSL and there is no honest way to share a function across that boundary.
+ * The constants are the tie: if one moves, the other has to move with it, and
+ * `tests/renderers.mjs` now measures the mean brightness of both frames and
+ * fails when they drift apart.
+ */
+export function filmicToneMap(x: number): number {
+  const a = 2.51;
+  const b = 0.03;
+  const c = 2.43;
+  const d = 0.59;
+  const e = 0.14;
+  const v = (x * (a * x + b)) / (x * (c * x + d) + e);
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 export function defaultPostSettings(): PostSettings {
   return {
     bloomStrength: 0.9,
@@ -133,9 +164,7 @@ export class PostProcess {
       for (let i = 0; i < lut.length; i++) {
         // Input runs to 2x white so the curve has headroom to roll off from.
         const x = (i / (lut.length - 1)) * 2 * exposure;
-        // Reinhard-with-shoulder: cheap, monotonic, and it keeps mid-tones
-        // almost unchanged so the game does not suddenly look washed out.
-        const mapped = (x * (1 + x / 4)) / (1 + x);
+        const mapped = filmicToneMap(x);
         let v = x * (1 - toneMapping) + mapped * toneMapping;
 
         // Split-tone. The shader weights these by the pixel's luminance; here

@@ -11,14 +11,23 @@ unter „Was noch offen ist".
 
 ## Die wichtigste Erkenntnis dieses Durchgangs
 
-Drei Systeme waren **vollständig gebaut und an nichts angeschlossen**. Sie
+Mehrere Systeme waren **vollständig gebaut und an nichts angeschlossen**. Sie
 bestanden jede Prüfung, die den Code liest, und keine, die das Verhalten misst:
 
 | System | Symptom | Ursache |
 |---|---|---|
 | KI-Bewegung | Gegner stand im Freien und schoss, den ganzen Kampf | `enterState()` löschte den gerade berechneten Pfad |
 | Zielhilfe | Regler in den Einstellungen ohne jede Wirkung | `aimAssistActive` wurde gelesen, aber von nichts gesetzt |
+| Partikelbudget | Jedes Gerät erzeugte die volle Anzahl, egal wie schlecht es lief | `EffectSystem.quality` dokumentierte sich als „vom Governor gesenkt" und wurde nie gesenkt |
 | Sprung/Vault | Taste belegt, Funktion deklariert, nie verdrahtet | (in einem früheren Durchgang behoben) |
+
+Nachdem das Muster erkannt war, habe ich gezielt danach gesucht statt darauf zu
+warten, wieder darüber zu stolpern: ein Scan über alle öffentlichen Felder, die
+gelesen und nie geschrieben werden (oder umgekehrt). Ergebnis waren neben dem
+Partikelbudget drei tote Regler, die inzwischen entfernt sind — `Loop.timeScale`
+(mit dem falschen Kommentar „von Menüs benutzt"), `InputSystem.touchDetected`
+und vier HUD-Callbacks, die neben der echten Verdrahtung herliefen und nichts
+trugen.
 
 Das ist ein Muster, kein Zufall, und es hat eine Konsequenz für die Prüfstrategie:
 
@@ -123,6 +132,21 @@ Zwei vollständige Renderer, beide geprüft:
 
 Beide stimmen überein: Rangkorrelation 0,899 über 8×4 Helligkeitszellen.
 
+**Und seit diesem Durchgang auch in der Helligkeit.** Die Rangkorrelation fragt
+nur nach der *Reihenfolge* der Zellen, und eine gleichmäßige Abdunklung lässt
+jede Reihenfolge unangetastet — genau deshalb ist folgendes durch jede bisherige
+Prüfung gekommen: der Shader benutzte eine filmische Kurve, der Software-Pfad eine
+Reinhard-Variante, deren Kommentar behauptete, sie lasse die Mitten „fast
+unverändert". Bei mittlerem Grau lagen beide um fast den Faktor zwei
+auseinander. Gemessen: das Software-Bild war **44 % dunkler** als das GPU-Bild
+derselben Szene.
+
+Wer auf dem Raycaster landete, spielte ein anderes, dunkleres Spiel — und bei
+einem Nachteinsatz entscheidet das, was man sehen kann. Beide Pfade teilen
+jetzt eine Kurve (Verhältnis 1,80 → 0,98), ein Unit-Test hält die
+TypeScript-Fassung gegen die aus dem Shader-Quelltext gelesenen Konstanten, und
+die Renderer-Prüfung misst zusätzlich die mittlere Helligkeit.
+
 Drei Stile, umschaltbar: **Comic**, **Futuristisch**, **Realistisch**. Echte
 Cel-Bänder vor der Albedo-Multiplikation, Konturen aus zweiten Differenzen der
 *reziproken* Tiefe — der einzige Ausdruck, der auf einer beliebigen Ebene
@@ -156,7 +180,7 @@ für das Compositing etwa 100 ms je Bild.
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
 | Karten | 3 (96², 78², 66²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 141 |
+| Simulationstests | 143 |
 
 ---
 
@@ -164,10 +188,10 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 141 Simulationstests, ohne Browser |
+| `npm test` | 143 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
-| `tests/renderers.mjs` | Beide Renderpfade im Vergleich |
+| `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |
 | `tests/browser.mjs` | Findet den vorhandenen Chromium statt des erwarteten |
 
 Eine Lehre, zweimal bezahlt: **`npm test` kann grün sein, während `tsc`
@@ -196,12 +220,19 @@ Ehrlich, und nach Gewicht sortiert.
    Bildraten auf echten Telefonen nicht. Das ist die größte offene Unbekannte
    im ganzen Projekt.
 
-4. **Inventarzellen sind auf kurzen Bildschirmen 32 px groß**, unter der
+4. **Munition lässt sich nicht auswählen.** `WeaponController.preferredAmmo`
+   existiert und wird beim Nachladen ausgewertet — gesetzt wird es von nichts,
+   weil es keine Oberfläche dafür gibt. Für ein Spiel dieser Art ist die
+   Munitionswahl eine der wichtigsten Entscheidungen überhaupt (Penetration
+   gegen Schaden), also ist das keine Kleinigkeit, sondern die größte offene
+   *Spielfunktion*. Der Haken ist da; die Bedienung fehlt.
+
+5. **Inventarzellen sind auf kurzen Bildschirmen 32 px groß**, unter der
    üblichen Empfehlung von 44 px für Berührungsziele. Vertretbar, weil
    Gegenstände über mehrere Zellen reichen und Auswahl per Antippen statt
    Ziehen läuft — aber ein 1×1-Gegenstand bleibt ein kleines Ziel.
 
-5. **Der Smoke-Test läuft gegen eine gesättigte Software-Rasterung.** Er hält
+6. **Der Smoke-Test läuft gegen eine gesättigte Software-Rasterung.** Er hält
    den Loop für Aufnahmen an und wiederholt einmal; das ist Kompensation für
    die Umgebung, nicht für das Spiel. Auf einer Maschine mit GPU wäre nichts
    davon nötig.

@@ -109,6 +109,38 @@ try {
       `which means one renderer is drawing the world back to front`,
   );
 
+  // Overall exposure, which both checks above are built to ignore.
+  //
+  // Rank correlation only asks whether the cells order the same way, and
+  // subtracting row means throws away level as well. That is right for what
+  // they test, and it leaves a real gap: one renderer could be uniformly
+  // washed out or crushed and both would still pass. The two paths do carry
+  // independently chosen bloom constants, so this is not a hypothetical.
+  //
+  // When this check was added it read 1.80 - the software frame was 44 %
+  // darker than the GPU frame of the identical scene, because the two paths
+  // carried different tone curves. They now share one and it reads 0.98.
+  //
+  // The band still allows real slack: different bloom implementations (a
+  // software downsample against GPU ping-pong framebuffers) and different
+  // texture filtering will never land on the same number. What it will not
+  // allow is the two images drifting far enough apart that the fallback stops
+  // looking like the same game - which on a night raid is not cosmetic, it
+  // decides what the player can see.
+  const gpuMean = mean(gpu.cells);
+  const swMean = mean(software.cells);
+  const ratio = gpuMean / Math.max(1e-6, swMean);
+  console.log(
+    `mean brightness: gpu ${gpuMean.toFixed(1)}, software ${swMean.toFixed(1)} ` +
+      `(ratio ${ratio.toFixed(2)})`,
+  );
+  assert(
+    ratio > 0.8 && ratio < 1.25,
+    `the two renderers are lit too differently (gpu ${gpuMean.toFixed(1)} vs ` +
+      `software ${swMean.toFixed(1)}, ratio ${ratio.toFixed(2)}) - same scene, same ` +
+      `conditions, so this is a tone or bloom mismatch rather than a scene difference`,
+  );
+
   console.log(`\nperformance, SwiftShader - indicative only, not a device measurement:`);
   console.log(`  gpu       ${gpu.fps.toFixed(1)} fps  draw ${gpu.draw.toFixed(2)} ms  at ${gpu.internal}`);
   console.log(`  software  ${software.fps.toFixed(1)} fps  draw ${software.draw.toFixed(2)} ms  at ${software.internal}`);
@@ -293,4 +325,9 @@ function flipHorizontally(cells) {
     for (let c = 0; c < COLS; c++) out.push(cells[r * COLS + (COLS - 1 - c)]);
   }
   return out;
+}
+
+/** Arithmetic mean of a series. */
+function mean(values) {
+  return values.reduce((a, b) => a + b, 0) / values.length;
 }

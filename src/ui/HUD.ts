@@ -62,11 +62,14 @@ export class HUD {
 
   private debugEl!: HTMLElement;
 
-  /** Callbacks wired by the game shell. */
-  onInteract: () => void = () => {};
-  onInventory: () => void = () => {};
-  onMap: () => void = () => {};
-  onPause: () => void = () => {};
+  // There were four callbacks here - `onInteract`, `onInventory`, `onMap`,
+  // `onPause` - described as "wired by the game shell". The shell assigned one
+  // of them and the HUD invoked none. Every one of those buttons actually
+  // works through `input.bindTap(node, action)`, which the game drains with
+  // `consumeAction`, so this was a second set of wires running alongside the
+  // real ones and carrying nothing. Left as a note rather than deleted
+  // silently, because a reader looking for how the action button fires should
+  // find the answer, not an empty space where a plausible answer used to be.
 
   constructor(
     container: HTMLElement,

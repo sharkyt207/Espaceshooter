@@ -13,6 +13,8 @@ import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
 import { AXIS_UP, AXIS_WEST, buildWorldMesh, FLOATS_PER_VERTEX } from '../src/render/gl/WorldMesh';
 import { DEFAULT_STYLE, STYLE_ORDER, STYLES, styleById } from '../src/render/Style';
+import { filmicToneMap } from '../src/render/PostProcess';
+import { COMPOSITE_FS } from '../src/render/gl/Shaders';
 import {
   buildPattern, patternFor, stepAt, PATTERN_BY_CLASS,
 } from '../src/weapons/RecoilPattern';
@@ -1134,6 +1136,65 @@ describe('WorldMesh', () => {
         assert.ok(ao > 0 && ao <= 1, `vertex ${i} has an out-of-range occlusion of ${ao}`);
       }
     }
+  });
+});
+
+describe('Tone mapping', () => {
+  // The two renderers have to agree about exposure, and for a long time they
+  // did not: the shader used a filmic curve, the software path used a Reinhard
+  // variant, and the measured result was a software frame 44 % darker than the
+  // GPU frame of the same scene. On a night raid that decides what the player
+  // can see, so it is not a cosmetic difference.
+  //
+  // The curves cannot literally be shared - one of them is GLSL - so this
+  // pins the TypeScript copy against the constants parsed out of the shader
+  // source. If either moves, this fails without needing a browser.
+  const shaderConstants = (): Record<string, number> => {
+    const body = COMPOSITE_FS.slice(COMPOSITE_FS.indexOf('vec3 tonemap('));
+    const out: Record<string, number> = {};
+    for (const m of body.slice(0, 400).matchAll(/const float ([a-e]) = ([0-9.]+);/g)) {
+      out[m[1]] = Number(m[2]);
+    }
+    return out;
+  };
+
+  test('the shader and the software path use the same curve', () => {
+    const k = shaderConstants();
+    assert.deepEqual(
+      Object.keys(k).sort(),
+      ['a', 'b', 'c', 'd', 'e'],
+      `could not read the tone curve out of the shader, got ${JSON.stringify(k)}`,
+    );
+
+    for (let i = 0; i <= 40; i++) {
+      const x = (i / 40) * 2.5;
+      const shader = Math.min(1, Math.max(0,
+        (x * (k.a * x + k.b)) / (x * (k.c * x + k.d) + k.e)));
+      const software = filmicToneMap(x);
+      assert.ok(
+        Math.abs(shader - software) < 1e-9,
+        `the two tone curves disagree at x=${x.toFixed(2)}: ` +
+          `shader ${shader.toFixed(6)}, software ${software.toFixed(6)}`,
+      );
+    }
+  });
+
+  test('it is monotonic, bounded, and lifts the mid-tones', () => {
+    let previous = -1;
+    for (let i = 0; i <= 200; i++) {
+      const v = filmicToneMap((i / 200) * 4);
+      assert.ok(v >= previous, `the curve must never go backwards (at ${i})`);
+      assert.ok(v >= 0 && v <= 1, `the curve must stay in range, got ${v}`);
+      previous = v;
+    }
+    assert.equal(filmicToneMap(0), 0, 'black has to stay black');
+    // The Reinhard curve this replaced returned 0.375 here, which is what made
+    // the fallback look like a different, darker game.
+    const mid = filmicToneMap(0.5);
+    assert.ok(
+      mid > 0.55 && mid < 0.68,
+      `mid grey should land near 0.62, got ${mid.toFixed(3)}`,
+    );
   });
 });
 
