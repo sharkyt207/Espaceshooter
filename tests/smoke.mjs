@@ -51,6 +51,21 @@ const context = await browser.newContext({
   viewport: { width: 900, height: 414 },
   deviceScaleFactor: 1,
 });
+// Playwright's thirty-second default assumes a browser that is keeping up.
+// This one is not: SwiftShader needs roughly a hundred milliseconds to
+// composite each frame of a full-screen canvas, and the raid now runs for the
+// whole suite rather than ending when the player dies, so that cost never
+// stops. Clicks, evaluates and screenshots all queue behind it, and which one
+// happens to lose is luck - the failures moved from screenshot to click to
+// evaluate as I chased them, always at a different step, which is the tell
+// that the step was never the problem.
+//
+// The game's own budget was measured before touching this: 1-2 ms simulation
+// and 1.2-1.9 ms drawing under sustained fire with all twenty-six hostiles
+// engaged, about three of a sixteen millisecond frame. Nothing here is slow
+// except the software rasteriser, so the honest fix is headroom, not a
+// narrower test.
+context.setDefaultTimeout(60_000);
 const page = await context.newPage();
 
 page.on('console', (m) => {
@@ -92,7 +107,7 @@ const shot = async (name) => {
   try {
     for (let attempt = 1; ; attempt++) {
       try {
-        await page.screenshot({ path, timeout: 15000 });
+        await page.screenshot({ path, timeout: 25_000 });
         return;
       } catch (err) {
         // Name the step. A bare "page.screenshot: Timeout" says nothing about
@@ -113,6 +128,30 @@ const visibleScreens = () =>
   page.evaluate(() =>
     Array.from(document.querySelectorAll('.screen:not(.hidden) .screen-title')).map((t) => t.textContent),
   );
+
+/**
+ * Wait for a screen to actually be up, then assert it is.
+ *
+ * The pattern this replaces was `press key; waitForTimeout(700); assert
+ * visible`, repeated five times. Every one of those is a guess about how long
+ * the browser will take, and every guess is wrong on a machine under load -
+ * which is how "the map should open" came to fail on a map that opens fine.
+ * Polling for the thing itself turns a race into a wait, and the assertion
+ * that follows still fails properly if the screen genuinely never arrives.
+ */
+const expectScreen = async (title, message) => {
+  try {
+    await page.waitForFunction(
+      (want) =>
+        Array.from(document.querySelectorAll('.screen:not(.hidden) .screen-title'))
+          .some((t) => t.textContent === want),
+      title,
+      { timeout: 20_000 },
+    );
+  } catch {
+    assert(false, `${message} (visible: ${JSON.stringify(await visibleScreens())})`);
+  }
+};
 
 /** Which screen is actually on top, by hit-testing the middle of the viewport. */
 const topmostScreen = (page) =>
@@ -246,7 +285,13 @@ try {
   await shot('deploy-night');
 
   await page.getByRole('button', { name: 'Absetzen' }).click();
-  await page.waitForTimeout(2500);
+  // Wait for the raid to exist rather than for a duration. Deploy generates a
+  // map, builds the world mesh and uploads it, and how long that takes depends
+  // entirely on the machine - a fixed 2.5 s was enough until the browser got
+  // busy, and then this failed as "expected a night raid, got ''", which is
+  // what an absent session looks like from the outside.
+  await page.waitForFunction(() => !!window.game.session, null, { timeout: 60_000 });
+  await page.waitForTimeout(600);
   await shot('raid');
 
   // --- the weapon light lights the world ------------------------------------
@@ -330,19 +375,48 @@ try {
     if (!g.session) return null;
     const s = g.session;
 
-    // Put a live hostile exactly on the crosshair, eight tiles out.
     const enemy = s.ai.enemies.find((e) => e.alive);
     if (!enemy) return null;
     s.player.pitch = 0;
-    s.player.angle = 0;
-    enemy.x = s.player.x + 8;
-    enemy.y = s.player.y;
 
+    // Both halves of the check have to survive a live raid, and the raid has
+    // twenty-six hostiles in it. Two things follow.
+    //
+    // The negative can't be "turn ninety degrees and expect nothing", because
+    // some *other* hostile may be standing there - that failed roughly one run
+    // in five and the detector was right every time. So find a bearing that is
+    // genuinely empty first, and make all the claims about that one bearing.
+    //
+    // The positive can't be "drop the target eight tiles east", because a wall
+    // in between makes the line-of-sight test correctly answer "no target",
+    // which reads as a broken detector rather than a badly chosen spot. So walk
+    // outwards along the empty bearing until a range works.
+    // Take the negative reading *before* moving anyone onto the bearing, which
+    // is the only ordering that works. There is no way to temporarily remove
+    // the chosen hostile: `alive` is a getter with no setter, so assigning to
+    // it silently does nothing, and teleporting the body off-map leaves the
+    // director pathfinding out of bounds every frame. But nothing needs
+    // removing - a bearing that reads empty while the hostile is still parked
+    // elsewhere is genuinely empty, and that reading stands.
+    let lane = null;
+    for (let i = 0; i < 32 && !lane; i++) {
+      const angle = (i / 32) * Math.PI * 2;
+      s.player.angle = angle;
+      if (s.crosshairOnTarget) continue; // something is already there
+
+      // Empty. Now walk outwards for a range with line of sight, because a
+      // wall in between makes the detector correctly answer "no target" and
+      // that would read as a fault rather than a badly chosen spot.
+      for (const dist of [8, 6, 4, 2.5]) {
+        enemy.x = s.player.x + Math.cos(angle) * dist;
+        enemy.y = s.player.y + Math.sin(angle) * dist;
+        if (s.crosshairOnTarget) { lane = { angle, dist, wasEmpty: true }; break; }
+      }
+    }
+    if (!lane) return { noLane: true };
+
+    const detectedAway = !lane.wasEmpty;
     const detected = s.crosshairOnTarget;
-    // And off it, by ninety degrees - same enemy, same distance.
-    s.player.angle = Math.PI / 2;
-    const detectedAway = s.crosshairOnTarget;
-    s.player.angle = 0;
 
     const swing = async (active) => {
       g.input.releaseAll();
@@ -364,11 +438,12 @@ try {
     const free = await swing(false);
     const slowed = await swing(true);
     s.player.pitch = 0;
-    return { detected, detectedAway, free, slowed, strength: g.input.config.aimAssist };
+    return { detected, detectedAway, free, slowed, lane, strength: g.input.config.aimAssist };
   });
   assert(assist, 'aim assist check needs a live raid with a hostile in it');
+  assert(!assist.noLane, 'no clear firing lane anywhere around the player - cannot test the assist');
   assert(assist.detected, 'a hostile dead ahead in the open must register under the crosshair');
-  assert(!assist.detectedAway, 'a hostile ninety degrees off the crosshair must not register');
+  assert(!assist.detectedAway, 'an empty bearing must not register a target');
   assert(assist.strength > 0, `the default profile should ship some assist, got ${assist.strength}`);
   assert(
     assist.slowed < assist.free * 0.995,
@@ -386,24 +461,23 @@ try {
   // missing. The checks above drive `aimAssistActive` by hand, so both would
   // still pass with nothing in the frame loop setting it - which is precisely
   // the state this arrived in. This asserts the game closes that loop itself.
-  const wired = await page.evaluate(async () => {
+  const wired = await page.evaluate(async (lane) => {
     const g = window.game;
     const s = g.session;
     const enemy = s?.ai.enemies.find((e) => e.alive);
     if (!enemy) return null;
-    s.player.angle = 0;
     s.player.pitch = 0;
     // Re-place each pass: the hostiles are live and walking, and a target that
     // strolls out of a 2-degree window mid-check would read as a wiring fault.
     for (let i = 0; i < 12; i++) {
-      enemy.x = s.player.x + 8;
-      enemy.y = s.player.y;
-      enemy.alive = true;
+      s.player.angle = lane.angle;
+      enemy.x = s.player.x + Math.cos(lane.angle) * lane.dist;
+      enemy.y = s.player.y + Math.sin(lane.angle) * lane.dist;
       await new Promise((r) => setTimeout(r, 60));
       if (g.input.aimAssistActive) return true;
     }
     return false;
-  });
+  }, assist.lane);
   assert(
     wired,
     'the frame loop must set aimAssistActive when a hostile is under the crosshair - ' +
@@ -562,7 +636,7 @@ try {
   await keepAlive();
   await page.keyboard.press('KeyM');
   await page.waitForTimeout(700);
-  assert((await visibleScreens()).includes('Sektorkarte'), 'the map should open');
+  await expectScreen('Sektorkarte', 'the map should open');
   await shot('map');
   await page.keyboard.press('KeyM');
   await page.waitForTimeout(400);
@@ -570,7 +644,7 @@ try {
   await keepAlive();
   await page.keyboard.press('Tab');
   await page.waitForTimeout(700);
-  assert((await visibleScreens()).includes('Inventar'), 'the inventory should open');
+  await expectScreen('Inventar', 'the inventory should open');
   await shot('inventory');
   await page.keyboard.press('Tab');
   await page.waitForTimeout(400);
@@ -599,12 +673,12 @@ try {
     await abandon.click();
   }
   await page.waitForTimeout(900);
-  assert((await visibleScreens()).includes('Einsatzbericht'), 'the debrief should show');
+  await expectScreen('Einsatzbericht', 'the debrief should show');
   await shot('results');
 
   await page.getByRole('button', { name: 'Zurück ins Versteck' }).click();
   await page.waitForTimeout(700);
-  assert((await visibleScreens()).includes('Versteck'), 'should return to the hideout');
+  await expectScreen('Versteck', 'should return to the hideout');
   await shot('back-in-hideout');
 
   // --- persistence -----------------------------------------------------------
@@ -612,7 +686,7 @@ try {
   await page.waitForTimeout(600);
   await page.getByRole('button', { name: 'Fortsetzen' }).click();
   await page.waitForTimeout(700);
-  assert((await visibleScreens()).includes('Versteck'), 'a saved profile should load');
+  await expectScreen('Versteck', 'a saved profile should load');
   await shot('loaded-save');
 } catch (err) {
   failure = err;
