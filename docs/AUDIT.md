@@ -104,7 +104,13 @@ Sie fächern von 2 auf 12 Kacheln auf, nehmen unterschiedliche Wege, zwei von
 drei enden auf Deckungsfeldern (Deckungswert 120 und 60), einer umgeht weit über
 die Flanke. Kein Stapeln, keine gemeinsame Linie.
 
-### Orte, die sich unterscheiden
+Vier Stufen: Streuner, Wache, Söldner, Kommandant. Sichtweiten 22/28/34/40
+Kacheln. Trupps teilen Kontakte, aber schwächer als eine eigene Sichtung — man
+läuft dorthin, wo der Partner ruft, man bekommt nicht seine Augen.
+
+---
+
+## Orte, die sich unterscheiden
 
 Die drei Karten unterschieden sich **untereinander so wenig wie zwei Seeds
 derselben Karte**: 25,8–29,2 % feste Fläche, mittlere Sichtweite 8,3–10,8 —
@@ -132,14 +138,6 @@ zuerst einen `structureSpacing`-Parameter eingebaut, in der Annahme, der Abstand
 zwischen Strukturen sei ausschlaggebend — gemessen bewegte er die Zahl von 7,3
 auf 8,3 über den Bereich 2 bis 12 Kacheln. Vierzehn Prozent für einen Regler,
 der aussieht, als forme er die Karte um. Er ist wieder draußen.
-
----
-
-## Gegner (Fortsetzung)
-
-Vier Stufen: Streuner, Wache, Söldner, Kommandant. Sichtweiten 22/28/34/40
-Kacheln. Trupps teilen Kontakte, aber schwächer als eine eigene Sichtung — man
-läuft dorthin, wo der Partner ruft, man bekommt nicht seine Augen.
 
 ---
 
