@@ -39,6 +39,35 @@ export function isStandalone(): boolean {
   return iosStandalone || window.matchMedia('(display-mode: standalone)').matches;
 }
 
+/**
+ * Register the service worker, which is what makes the home-screen icon an
+ * app rather than a bookmark.
+ *
+ * Without it the game is offline in every sense except the one that matters:
+ * every asset is generated at runtime and nothing talks to a server, but the
+ * *first* request still needs a network, so tapping the icon with no signal
+ * produced a browser error page.
+ *
+ * Registered after `load` on purpose. Doing it earlier competes with the
+ * bundle and the first frame for the same connection, and there is nothing to
+ * gain - the worker only ever affects the *next* launch.
+ *
+ * Failure is silent and harmless. Service workers need a secure context, so
+ * this does nothing on a plain-HTTP LAN address, and the game runs exactly as
+ * it did before. It is an upgrade, not a dependency.
+ */
+export function registerServiceWorker(): void {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', () => {
+    // Relative to the document, so this works at a domain root and equally in
+    // a project subdirectory like /Espaceshooter/ without knowing which.
+    navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(() => {
+      // Insecure origin, private mode, or a browser that refuses. None of
+      // these are worth a console error the player cannot act on.
+    });
+  });
+}
+
 // ===========================================================================
 // Screen wake lock
 // ===========================================================================

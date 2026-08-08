@@ -1,6 +1,8 @@
 import './ui/styles.css';
 import { Game } from './game/Game';
-import { IS_ANDROID, IS_IOS, isStandalone, lockLandscape, requestFullscreen } from './platform/Platform';
+import {
+  IS_ANDROID, IS_IOS, isStandalone, lockLandscape, registerServiceWorker, requestFullscreen,
+} from './platform/Platform';
 
 /** Remembers that the player has dismissed the install hint. */
 const INSTALL_DISMISSED_KEY = 'grayzone.install.dismissed';
@@ -64,6 +66,12 @@ function installBanner(host: HTMLElement): void {
 function boot(): void {
   const app = document.getElementById('app');
   if (!app) throw new Error('#app container missing');
+
+  // Makes the home-screen icon an app rather than a bookmark: without a
+  // service worker the first request still needs a network, so launching with
+  // no signal produced a browser error page - on a game that generates every
+  // asset at runtime and talks to nothing.
+  registerServiceWorker();
 
   // A phone browser will happily interpret a fast swipe as a page gesture and
   // a two-finger tap as a zoom. Both are fatal to a shooter, so we suppress
