@@ -26,6 +26,7 @@ export class SettingsScreen implements Screen {
       onShowPrimer: () => void;
       /** What is drawing the raid right now, for the renderer hint. */
       rendererName: () => string;
+      onControls: () => void;
     },
   ) {
     const shell = screenShell('Einstellungen', 'Steuerung, Darstellung und Ton', () => actions.onClose());
@@ -129,14 +130,20 @@ export class SettingsScreen implements Screen {
 
     content.appendChild(this.section('Steuerung'));
     content.appendChild(
-      this.sliderRow('Sichtempfindlichkeit', this.settings.lookSensitivity, 0.3, 2.5, (v) => {
-        this.settings.lookSensitivity = v;
-        this.apply();
-      }),
+      el('div', { class: 'list-row' }, [
+        el('div', { class: 'grow' }, [
+          el('div', { class: 'title', text: 'Steuerung einrichten' }),
+          el('div', {
+            class: 'sub',
+            text: 'Griff, Empfindlichkeit je Achse, Zielfernrohr, Kreiselsensor und Tastenlayout.',
+          }),
+        ]),
+        button('Öffnen', () => this.actions.onControls(), 'btn small'),
+      ]),
     );
     content.appendChild(
-      this.toggleRow('Y-Achse invertieren', '', this.settings.invertY, (v) => {
-        this.settings.invertY = v;
+      this.sliderRow('Gesamtempfindlichkeit', this.settings.lookSensitivity, 0.3, 2.5, (v) => {
+        this.settings.lookSensitivity = v;
         this.apply();
       }),
     );

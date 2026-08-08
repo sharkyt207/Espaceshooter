@@ -1275,3 +1275,55 @@ describe('RecoilPattern', () => {
     assert.ok(signs.size > 1, 'a pattern that only ever pulls one way is a line, not a pattern');
   });
 });
+
+describe('Attachment recoil axes', () => {
+  const fitted = (weaponId: string, attachmentId: string | null) => {
+    const stack = createStack(weaponId);
+    if (attachmentId) {
+      // Attachments are stacks, not ids, and the slot comes from the part's
+      // own definition - so this cannot quietly fit a grip to the muzzle and
+      // prove nothing.
+      const slot = ItemDB.get(attachmentId).attachment!.slot;
+      stack.attachments = { [slot]: createStack(attachmentId) };
+    }
+    return resolveWeapon(stack);
+  };
+
+  test('a grip fights lateral wander, a stock fights climb', () => {
+    // The point of splitting the axes: two parts that remove a similar total
+    // amount of recoil should not feel like the same part.
+    const bare = fitted('wp_sg545', null);
+    const grip = fitted('wp_sg545', 'att_grip_vert');
+    const stock = fitted('wp_sg545', 'att_stock_heavy');
+
+    assert.ok(
+      grip.recoilHorizontal / bare.recoilHorizontal < grip.recoilVertical / bare.recoilVertical,
+      'a vertical grip should help lateral control more than climb',
+    );
+    assert.ok(
+      stock.recoilVertical / bare.recoilVertical < stock.recoilHorizontal / bare.recoilHorizontal,
+      'a heavy stock should help climb more than lateral control',
+    );
+  });
+
+  test('specialising does not make a part stronger overall', () => {
+    // The bias redistributes the benefit; it must not manufacture extra.
+    const bare = fitted('wp_ar556', null);
+    const braked = fitted('wp_ar556', 'att_brake_std');
+    const bareTotal = bare.recoilVertical + bare.recoilHorizontal;
+    const brakedTotal = braked.recoilVertical + braked.recoilHorizontal;
+    assert.ok(brakedTotal < bareTotal, 'a muzzle brake should still reduce recoil overall');
+    assert.ok(
+      brakedTotal > bareTotal * 0.4,
+      `and not become an eighty percent reduction by the back door (${brakedTotal} vs ${bareTotal})`,
+    );
+  });
+
+  test('every recoil figure stays positive', () => {
+    for (const id of ['att_brake_std', 'att_grip_vert', 'att_stock_heavy', 'att_suppressor']) {
+      const r = fitted('wp_sk762', id);
+      assert.ok(r.recoilVertical > 0, `${id} drove vertical recoil to ${r.recoilVertical}`);
+      assert.ok(r.recoilHorizontal > 0, `${id} drove horizontal recoil to ${r.recoilHorizontal}`);
+    }
+  });
+});

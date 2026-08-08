@@ -81,6 +81,10 @@ export function resolveWeapon(stack: ItemStack, ctx: ResolveContext = NEUTRAL_CO
   if (!base) throw new Error(`[WeaponRuntime] item "${stack.defId}" is not a weapon`);
 
   let recoilMul = 1;
+  // Tracked per axis as well as overall, so a grip and a stock do different
+  // things to the same weapon rather than the same thing by different amounts.
+  let recoilMulV = 1;
+  let recoilMulH = 1;
   let accuracyMul = 1;
   let loudnessMul = 1;
   let ergoDelta = 0;
@@ -97,6 +101,14 @@ export function resolveWeapon(stack: ItemStack, ctx: ResolveContext = NEUTRAL_CO
       const a = ItemDB.get(att.defId).attachment;
       if (!a) continue;
       recoilMul *= a.recoilMultiplier;
+      // Split the part's benefit across the axes by its bias. A part that
+      // removes 20 percent of recoil with a bias of -0.7 takes most of that
+      // from the climb and only a little from the wander; the total effect is
+      // preserved either way, so nothing gets stronger by being specialised.
+      const effect = 1 - a.recoilMultiplier;
+      const bias = a.recoilAxis ?? 0;
+      recoilMulV *= 1 - effect * (1 - bias) * 0.5 * 2;
+      recoilMulH *= 1 - effect * (1 + bias) * 0.5 * 2;
       accuracyMul *= a.accuracyMultiplier;
       loudnessMul *= a.loudnessMultiplier;
       ergoDelta += a.ergonomicsDelta;
@@ -139,8 +151,8 @@ export function resolveWeapon(stack: ItemStack, ctx: ResolveContext = NEUTRAL_CO
     fireModes: base.fireModes,
     rpm: base.rpm,
     burstCount: base.burstCount,
-    recoilVertical: base.recoilVertical * recoilScale,
-    recoilHorizontal: base.recoilHorizontal * recoilScale,
+    recoilVertical: base.recoilVertical * recoilScale * recoilMulV / Math.max(0.01, recoilMul),
+    recoilHorizontal: base.recoilHorizontal * recoilScale * recoilMulH / Math.max(0.01, recoilMul),
     // Better parts also settle the weapon faster, not just kick it less.
     recoilRecovery: base.recoilRecovery * (1 + (1 - recoilMul) * 0.6) * (1 + ctx.recoilSkill * 0.25),
     accuracyMoa: base.accuracyMoa * accuracyMul * wearAccuracy,

@@ -17,6 +17,7 @@ import { LootScreen } from '../ui/screens/LootScreen';
 import { MapScreen } from '../ui/screens/MapScreen';
 import { ResultsScreen } from '../ui/screens/ResultsScreen';
 import { SettingsScreen } from '../ui/screens/SettingsScreen';
+import { ControlsScreen } from '../ui/screens/ControlsScreen';
 import { PauseScreen } from '../ui/screens/PauseScreen';
 import { PrimerScreen } from '../ui/screens/PrimerScreen';
 import { blueprintById } from '../data/MapData';
@@ -74,6 +75,7 @@ export class Game {
   private mapScreen!: MapScreen;
   private resultsScreen!: ResultsScreen;
   private settingsScreen!: SettingsScreen;
+  private controlsScreen!: ControlsScreen;
   private pauseScreen!: PauseScreen;
   private primerScreen!: PrimerScreen;
 
@@ -159,6 +161,12 @@ export class Game {
       onResetProfile: () => this.resetProfile(),
       onShowPrimer: () => this.screens.push('primer'),
       rendererName: () => this.renderer.rendererName,
+      onControls: () => this.screens.push('controls'),
+    });
+
+    this.controlsScreen = new ControlsScreen(this.settings, {
+      onClose: () => this.screens.pop(),
+      onApply: (settings) => this.applySettings(settings),
     });
 
     this.pauseScreen = new PauseScreen({
@@ -171,8 +179,8 @@ export class Game {
 
     for (const screen of [
       this.mainMenu, this.hideout, this.deployScreen, this.lootScreen,
-      this.mapScreen, this.resultsScreen, this.settingsScreen, this.pauseScreen,
-      this.primerScreen,
+      this.mapScreen, this.resultsScreen, this.settingsScreen, this.controlsScreen,
+      this.pauseScreen, this.primerScreen,
     ]) {
       this.screens.register(screen);
     }
@@ -273,7 +281,10 @@ export class Game {
     this.audio.setVolume(settings.masterVolume);
     this.audio.setMuted(settings.muted);
     this.input.sensitivity = settings.lookSensitivity;
-    this.input.invertY = settings.invertY;
+    // The whole touch profile, with `invertY` kept in sync: it predates the
+    // profile and is still the field the rest of the game reads.
+    this.input.config = { ...settings.touch, invertY: settings.invertY };
+    this.hud.applyTouchLayout(this.input.config);
     this.renderer.fixedScale = settings.renderScale;
     this.renderer.applyPostQuality(settings.postQuality);
     this.renderer.setRendererMode(settings.renderer);

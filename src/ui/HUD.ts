@@ -1,4 +1,5 @@
 import { bar, clear, duration, el, weight as fmtWeight } from './Dom';
+import type { ButtonId, TouchConfig } from '../input/TouchConfig';
 import type { InputSystem } from '../input/InputSystem';
 import type { RaidSession } from '../raid/RaidSession';
 import type { GameBus, NotificationPayload } from '../core/GameEvents';
@@ -215,7 +216,56 @@ export class HUD {
     corner.append(this.inventoryBtn, this.mapBtn, this.pauseBtn);
     layer.appendChild(corner);
 
+    this.touchLayer = layer;
     this.root.appendChild(layer);
+  }
+
+  private touchLayer!: HTMLElement;
+
+  /**
+   * Place every touch button from the player's layout.
+   *
+   * Written as inline styles over the stylesheet's defaults rather than as a
+   * pile of CSS custom properties, because the layout editor needs to move a
+   * single button without regenerating a sheet, and because `right`/`bottom`
+   * anchoring in the stylesheet has to be actively cancelled - a button given
+   * a `left` while it still has a `right` is stretched between the two rather
+   * than moved.
+   *
+   * Positions are fractions of the viewport and sizes are fractions of its
+   * shorter side, so one layout serves every phone without a second set of
+   * numbers. A button at zero opacity also stops accepting touches: an
+   * invisible control that still swallows a finger is worse than no control.
+   */
+  applyTouchLayout(config: TouchConfig): void {
+    if (!this.touchLayer) return;
+    const shortSide = Math.min(window.innerWidth, window.innerHeight);
+
+    // Direct children only. The corner row (inventory, map, pause) lives
+    // inside a flex container that positions it against the safe area, and
+    // giving those absolute coordinates from the layout takes them out of that
+    // flow and straight off the edge of the screen. They are deliberately not
+    // player-positionable for the same reason: they are the escape hatches,
+    // and an escape hatch someone has dragged off-screen is a trap.
+    for (const node of this.touchLayer.querySelectorAll<HTMLElement>(':scope > [data-control]')) {
+      const id = node.dataset.control as ButtonId | undefined;
+      const layout = id ? config.buttons[id] : undefined;
+      if (!layout) continue;
+
+      const px = Math.round(shortSide * layout.size);
+      node.style.left = `${layout.x * 100}%`;
+      node.style.top = `${layout.y * 100}%`;
+      node.style.right = 'auto';
+      node.style.bottom = 'auto';
+      node.style.transform = 'translate(-50%, -50%)';
+      node.style.width = `${px}px`;
+      node.style.height = `${px}px`;
+      node.style.opacity = String(layout.opacity);
+      node.style.pointerEvents = layout.opacity <= 0.02 ? 'none' : 'auto';
+      // Type scales with the button, or a shrunk button becomes a word with a
+      // ring around it.
+      node.style.fontSize = `${Math.max(8, Math.round(px * 0.15))}px`;
+    }
   }
 
   private fireBtn!: HTMLElement;

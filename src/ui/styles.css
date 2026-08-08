@@ -1786,3 +1786,67 @@ html, body {
 /* Realistisch: nothing. The absence is the position - no glow, no line weight,
    no letter-spacing. Listed explicitly so the next person does not assume it
    was forgotten. */
+
+/* ==========================================================================
+   Range sliders
+   ==========================================================================
+
+   The browser default is a blue that belongs to no style in this game, and it
+   is the one control the settings screens are made of - so it undoes the
+   palette on the exact screen where a player is judging it.
+
+   Track and thumb have to be styled per engine: WebKit and Blink use
+   `::-webkit-slider-*`, Gecko uses `::-moz-range-*`, and neither understands
+   the other's selector. They cannot be combined into one rule - a selector
+   list containing an unknown pseudo-element is dropped entirely by both. */
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 150px;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+  /* The thumb has to be reachable by a thumb: 22px of track is not, so the
+     element is padded out to a comfortable target while the visible rail
+     stays thin. */
+  touch-action: pan-y;
+}
+
+.slider.mini { width: 72px; }
+
+.slider::-webkit-slider-runnable-track {
+  height: 3px;
+  background: var(--line-bright);
+  border-radius: 2px;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.slider::-moz-range-track {
+  height: 3px;
+  background: var(--line-bright);
+  border-radius: 2px;
+}
+
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.slider:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); outline-offset: 2px; }
+.slider:focus-visible::-moz-range-thumb { outline: 2px solid var(--text); outline-offset: 2px; }

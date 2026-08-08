@@ -5,6 +5,7 @@ import type { GridSlotState, ItemStack } from '../inventory/ItemStack';
 import type { EquipSlot } from '../data/ItemTypes';
 import type { Profile } from '../meta/Profile';
 import { DEFAULT_STYLE, type StyleId } from '../render/Style';
+import { defaultTouchConfig, type TouchConfig } from '../input/TouchConfig';
 
 /**
  * SaveSystem - versioned persistence to localStorage.
@@ -68,6 +69,15 @@ export interface GameSettings {
   renderer: number;
   /** Which visual direction the game is played in. See `render/Style.ts`. */
   style: StyleId;
+  /**
+   * Touch layout and aim tuning. See `input/TouchConfig.ts`.
+   *
+   * Stored whole rather than flattened into a dozen sibling fields, because it
+   * is edited as a unit, shipped as presets, and will grow - and because a
+   * partial object merged over the defaults degrades gracefully when a build
+   * adds a knob that an existing save has never heard of.
+   */
+  touch: TouchConfig;
 }
 
 export function defaultSettings(): GameSettings {
@@ -84,6 +94,7 @@ export function defaultSettings(): GameSettings {
     postQuality: -1,
     renderer: -1,
     style: DEFAULT_STYLE,
+    touch: defaultTouchConfig(),
   };
 }
 
@@ -191,7 +202,17 @@ export class SaveSystem {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
       if (!raw) return fallback;
-      return { ...fallback, ...(JSON.parse(raw) as Partial<GameSettings>) };
+      const stored = JSON.parse(raw) as Partial<GameSettings>;
+      const merged = { ...fallback, ...stored };
+      // The touch config is nested, so a shallow spread would replace the
+      // whole object with whatever an older build happened to write - losing
+      // every knob added since. Merge it a level deeper, buttons included.
+      merged.touch = {
+        ...fallback.touch,
+        ...(stored.touch ?? {}),
+        buttons: { ...fallback.touch.buttons, ...(stored.touch?.buttons ?? {}) },
+      };
+      return merged;
     } catch {
       return fallback;
     }

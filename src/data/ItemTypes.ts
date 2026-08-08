@@ -183,6 +183,13 @@ export interface AttachmentStats {
   fits: string[];
   /** Additive modifiers, applied multiplicatively where they are ratios. */
   recoilMultiplier: number;
+  /**
+   * How the recoil benefit splits between the axes.
+   *
+   * -1 is entirely vertical, +1 entirely horizontal, 0 even. See the note in
+   * `AttachmentData` for why this is not just another percentage.
+   */
+  recoilAxis: number;
   accuracyMultiplier: number;
   ergonomicsDelta: number;
   /** Suppressors reduce loudness and muzzle flash. */
