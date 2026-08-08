@@ -1,0 +1,68 @@
+# Publish the playable build to GitHub Pages.
+#
+# This exists because "install it to your home screen" needs a real URL. An
+# artifact preview lives inside a frame on someone else's domain: adding that
+# to a home screen adds a bookmark to that domain, which needs a login, keeps
+# the browser chrome, and cannot register a service worker for the game. None
+# of that is an app.
+#
+# A Pages URL is the game's own origin, so the manifest applies, the icon is
+# the game's icon, the launch is fullscreen landscape, and the service worker
+# can make it start without a network.
+#
+# The build output uses relative asset paths (`base: './'` in the Vite config),
+# so it works unchanged at a project subpath like /Espaceshooter/ as well as at
+# a domain root.
+name: Pages
+
+on:
+  push:
+    branches: [main, master]
+  # So the first deploy does not have to wait for a commit.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. Cancelling a half-finished one would leave the site in
+# whatever state it reached, which for a game people have installed is worse
+# than being a few minutes stale.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The same gate used locally. `npm run build` already runs `tsc
+      # --noEmit`, and the simulation tests are quick enough that shipping a
+      # broken build to something installed on a phone is not worth the minute
+      # saved.
+      - run: npm test
+      - run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

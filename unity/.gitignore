@@ -1,0 +1,26 @@
+# Unity generates these; they must never be committed.
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Generated IDE projects
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+.vs/
+.idea/
+
+# Build outputs
+*.apk
+*.aab
+*.ipa
+*.unitypackage
+crashlytics-build.properties

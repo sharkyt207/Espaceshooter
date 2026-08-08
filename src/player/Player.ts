@@ -1,0 +1,541 @@
+import { nextActorId } from '../core/Ids';
+import type { GameBus } from '../core/GameEvents';
+import { clamp, clamp01, damp, wrapAngle } from '../core/Math2D';
+import { HealthSystem } from '../health/HealthSystem';
+import { Inventory } from '../inventory/Inventory';
+import { METERS_PER_TILE, TileMap, TILE_DEFS } from '../world/TileMap';
+import { circleFits, moveCircle } from '../world/Physics';
+import type { Combatant } from '../combat/Combatant';
+import type { BodyPart } from '../data/ItemTypes';
+
+/**
+ * Player - the locally controlled operator.
+ *
+ * Movement is built around three coupled resources, because that coupling is
+ * what makes a hardcore extraction shooter tense rather than merely slow:
+ *
+ *   weight  -> speed and stamina drain. Greed literally slows you down.
+ *   stamina -> sprinting, and the steadiness of your aim afterwards.
+ *   health  -> leg damage caps speed, arm damage widens your cone.
+ *
+ * Nothing here is a hard gate: an overloaded, exhausted, wounded player can
+ * still crawl to the extract. They will just be loud, slow and easy to hear -
+ * and being heard is the actual failure state.
+ */
+
+export type Stance = 0 | 1 | 2; // prone, crouched, standing
+
+/** Movement speeds in tiles/second at full stamina and no load. */
+const SPEED_BY_STANCE: Record<Stance, number> = { 0: 0.55, 1: 1.15, 2: 2.05 };
+const SPRINT_MULTIPLIER = 1.85;
+/** Eye height in metres per stance. */
+const EYE_HEIGHT_BY_STANCE: Record<Stance, number> = { 0: 0.45, 1: 1.05, 2: 1.62 };
+/** Silhouette height in metres per stance - what bullets test against. */
+const BODY_HEIGHT_BY_STANCE: Record<Stance, number> = { 0: 0.6, 1: 1.25, 2: 1.8 };
+
+/**
+ * How quickly the body reaches the speed the stick is asking for, per second.
+ *
+ * This is the single number that decides whether the player feels like a
+ * person or like a cursor. Without it, position is integrated straight from
+ * the input: releasing the stick stops dead in one frame and a direction
+ * change is instantaneous, which is exactly what reads as "floating robot".
+ *
+ * Acceleration is higher than deceleration on purpose. Getting moving is a
+ * decision the player just made and should feel responsive; stopping is the
+ * body's mass, and letting it carry a moment further is where the weight is
+ * actually felt. Both are well above what a real body manages, because a
+ * shooter that is honest about human inertia is a shooter that feels broken.
+ */
+const ACCELERATION = 11;
+const DECELERATION = 8;
+/**
+ * Extra resistance when reversing direction rather than merely stopping.
+ *
+ * Turning a run around means shedding all of the old velocity before building
+ * the new, and treating that as a single blend understates it badly - it is
+ * what makes strafe-spam a viable dodge in games that get it wrong.
+ */
+const REVERSAL_DRAG = 1.7;
+
+/**
+ * Chest-high, in metres: the tallest obstacle a loaded operator will climb.
+ *
+ * Only crates qualify in this world, which is the point. A crate line is
+ * otherwise an impassable wall, so being able to cross it turns cover into a
+ * route and gives the map a second layer of flow - which is a real tactical
+ * choice, where a jump that clears nothing would be decoration.
+ */
+const VAULT_MAX_HEIGHT = 1.4;
+/** Seconds spent committed to the climb. */
+const VAULT_SECONDS = 0.72;
+const VAULT_STAMINA = 16;
+
+/** Load in kg below which there is no penalty at all. */
+const FREE_CARRY_KG = 22;
+/** Load at which the player can barely move. */
+const MAX_CARRY_KG = 68;
+
+export class Player implements Combatant {
+  readonly id = nextActorId();
+  readonly isPlayer = true;
+  readonly name = 'Operator';
+  readonly radius = 0.28;
+
+  x = 0;
+  y = 0;
+  angle = 0;
+  /** Aim elevation in radians, clamped to a human neck. */
+  pitch = 0;
+
+  stance: Stance = 2;
+  height = BODY_HEIGHT_BY_STANCE[2];
+  eyeHeight = EYE_HEIGHT_BY_STANCE[2];
+
+  /** Lean offset -1..1, used for peeking around cover. */
+  lean = 0;
+  private leanTarget = 0;
+
+  /** 0..100. */
+  stamina = 100;
+  private staminaLockout = 0;
+
+  /**
+   * Velocity in tiles/sec, in world space. State, not a derived value.
+   *
+   * The whole point of holding this is that the input sets a *target* and the
+   * body chases it, so momentum survives between frames.
+   */
+  velX = 0;
+  velY = 0;
+
+  /**
+   * Vault state. Non-null only while crossing an obstacle.
+   *
+   * The whole move is a scripted arc rather than physics: the player is
+   * committed the moment it starts, cannot steer, cannot shoot, and arrives
+   * where the climb was aimed. That commitment is what makes it a decision -
+   * a vault you could abort halfway would just be a faster way to walk.
+   */
+  private vault: {
+    fromX: number; fromY: number; toX: number; toY: number; t: number;
+  } | null = null;
+
+  get isVaulting(): boolean {
+    return this.vault !== null;
+  }
+
+  /** Ground speed in tiles/sec, measured after collision. */
+  speed = 0;
+  sprinting = false;
+
+  readonly health: HealthSystem;
+  readonly inventory = new Inventory();
+
+  /** Accumulated distance since the last footstep sound. */
+  private stepAccumulator = 0;
+  /** Bob phase for the viewmodel and camera. */
+  bobPhase = 0;
+
+  /** Set while an interaction (looting, healing) is in progress. */
+  busySeconds = 0;
+  busyLabel = '';
+  private busyOnComplete: (() => void) | null = null;
+
+  constructor(private readonly bus: GameBus) {
+    this.health = new HealthSystem(bus, true);
+  }
+
+  get alive(): boolean {
+    return !this.health.dead;
+  }
+
+  reset(x: number, y: number, angle: number): void {
+    this.x = x;
+    this.y = y;
+    this.angle = angle;
+    this.pitch = 0;
+    this.stance = 2;
+    this.lean = 0;
+    this.leanTarget = 0;
+    this.stamina = 100;
+    this.staminaLockout = 0;
+    this.speed = 0;
+    this.velX = 0;
+    this.velY = 0;
+    this.sprinting = false;
+    this.stepAccumulator = 0;
+    this.busySeconds = 0;
+    this.busyOnComplete = null;
+    this.applyStance();
+  }
+
+  // =========================================================================
+  // Stance & lean
+  // =========================================================================
+
+  setStance(stance: Stance): void {
+    if (this.stance === stance) return;
+    // Going prone with a leg fracture is fine; getting up again is not free,
+    // but we do not block it - being unable to move is never fun.
+    this.stance = stance;
+    this.applyStance();
+    this.bus.emit('player:stanceChanged', { stance: ['liegend', 'geduckt', 'stehend'][stance] });
+  }
+
+  /**
+   * Try to climb the obstacle directly ahead.
+   *
+   * Returns false, and does nothing, whenever the move is not available - the
+   * caller can use that to play a refusal rather than leaving the player
+   * pressing a button that silently does nothing.
+   *
+   * The landing tile is checked as well as the obstacle. Vaulting into a wall
+   * would either wedge the player inside geometry or hand them a free teleport
+   * past two tiles, depending on how the collision resolved it.
+   */
+  tryVault(map: TileMap): boolean {
+    if (this.vault || this.isBusy) return false;
+    // Standing only: a crouched or prone operator has nothing to push off.
+    if (this.stance !== 2) return false;
+    if (this.stamina < VAULT_STAMINA || this.staminaLockout > 0) return false;
+    if (this.overloaded) return false;
+
+    const cos = Math.cos(this.angle);
+    const sin = Math.sin(this.angle);
+    const obstacleX = Math.floor(this.x + cos * 0.75);
+    const obstacleY = Math.floor(this.y + sin * 0.75);
+    if (!map.inBounds(obstacleX, obstacleY)) return false;
+
+    const def = TILE_DEFS[map.tiles[obstacleY * map.width + obstacleX]];
+    if (!def.wall || def.height > VAULT_MAX_HEIGHT) return false;
+
+    // Land one tile beyond the obstacle, centred, and only if that is open.
+    const landX = obstacleX + 0.5 + cos * 1.0;
+    const landY = obstacleY + 0.5 + sin * 1.0;
+    if (!circleFits(map, landX, landY, this.radius)) return false;
+
+    this.vault = { fromX: this.x, fromY: this.y, toX: landX, toY: landY, t: 0 };
+    this.velX = 0;
+    this.velY = 0;
+    this.stamina = Math.max(0, this.stamina - VAULT_STAMINA);
+    this.bus.emit('sound:emit', {
+      x: this.x, y: this.y, radius: 9, intensity: 0.5,
+      kind: 'footstep', sourceId: this.id,
+    });
+    return true;
+  }
+
+  cycleStance(): void {
+    this.setStance(this.stance === 2 ? 1 : this.stance === 1 ? 0 : 2);
+  }
+
+  private applyStance(): void {
+    this.height = BODY_HEIGHT_BY_STANCE[this.stance];
+  }
+
+  setLean(target: number): void {
+    this.leanTarget = clamp(target, -1, 1);
+  }
+
+  // =========================================================================
+  // Carry load
+  // =========================================================================
+
+  /** 0 = unencumbered, 1 = at the practical carry limit. */
+  get loadFactor(): number {
+    const w = this.inventory.stats.weight;
+    return clamp01((w - FREE_CARRY_KG) / (MAX_CARRY_KG - FREE_CARRY_KG));
+  }
+
+  get carriedWeight(): number {
+    return this.inventory.stats.weight;
+  }
+
+  get overloaded(): boolean {
+    return this.inventory.stats.weight > MAX_CARRY_KG;
+  }
+
+  // =========================================================================
+  // Interaction lock
+  // =========================================================================
+
+  /** Begin a timed action. Moving or taking damage cancels it. */
+  beginAction(seconds: number, label: string, onComplete: () => void): void {
+    this.busySeconds = seconds;
+    this.busyLabel = label;
+    this.busyOnComplete = onComplete;
+  }
+
+  cancelAction(): void {
+    this.busySeconds = 0;
+    this.busyLabel = '';
+    this.busyOnComplete = null;
+  }
+
+  get isBusy(): boolean {
+    return this.busySeconds > 0;
+  }
+
+  // =========================================================================
+  // Per-tick update
+  // =========================================================================
+
+  /**
+   * @param moveX  strafe input -1..1 (right positive)
+   * @param moveY  forward input -1..1 (forward positive)
+   * @param wantSprint  sprint requested this tick
+   */
+  update(
+    dt: number,
+    map: TileMap,
+    moveX: number,
+    moveY: number,
+    wantSprint: boolean,
+  ): void {
+    this.health.update(dt);
+    if (!this.alive) {
+      this.speed = 0;
+      return;
+    }
+
+    // --- timed actions ----------------------------------------------------
+    if (this.busySeconds > 0) {
+      this.busySeconds -= dt;
+      if (this.busySeconds <= 0) {
+        const done = this.busyOnComplete;
+        this.busySeconds = 0;
+        this.busyLabel = '';
+        this.busyOnComplete = null;
+        done?.();
+      }
+      // Actions root the player: you cannot bandage on the move.
+      moveX = 0;
+      moveY = 0;
+    }
+
+    // --- lean --------------------------------------------------------------
+    this.lean = damp(this.lean, this.leanTarget, 11, dt);
+
+    // --- desired velocity --------------------------------------------------
+    const inputMag = Math.hypot(moveX, moveY);
+    const mods = this.health.modifiers;
+
+    // Sprinting requires stamina, a forward input, and standing or crouched.
+    const canSprint =
+      wantSprint &&
+      inputMag > 0.55 &&
+      moveY > 0.35 &&
+      this.stance === 2 &&
+      this.stamina > 3 &&
+      this.staminaLockout <= 0 &&
+      !this.overloaded;
+    this.sprinting = canSprint;
+
+    // Load slows you down hard at the top end - the last 10 kg hurt most.
+    const loadPenalty = 1 - this.loadFactor * this.loadFactor * 0.5;
+    const staminaPenalty = this.stamina < 20 ? 0.68 + 0.32 * (this.stamina / 20) : 1;
+
+    let speed = SPEED_BY_STANCE[this.stance] * mods.speed * loadPenalty * staminaPenalty;
+    speed *= this.inventory.stats.speedFactor;
+    if (canSprint) speed *= SPRINT_MULTIPLIER;
+
+    // Strafing and backpedalling are slower than moving forward.
+    let directionScale = 1;
+    if (inputMag > 0.01) {
+      const forwardness = moveY / inputMag;
+      directionScale = forwardness > 0 ? 1 : 0.62;
+      if (Math.abs(moveX / inputMag) > 0.7) directionScale *= 0.82;
+    }
+    speed *= directionScale;
+
+    // --- vault ---------------------------------------------------------------
+    //
+    // Runs before anything else and returns early: while climbing, the input
+    // is ignored entirely and the position is driven by the arc.
+    if (this.vault) {
+      this.vault.t += dt / VAULT_SECONDS;
+      const t = clamp01(this.vault.t);
+      // Ease out of the push and into the landing, so the middle of the move
+      // is the fastest part rather than the ends.
+      const eased = t * t * (3 - 2 * t);
+      this.x = this.vault.fromX + (this.vault.toX - this.vault.fromX) * eased;
+      this.y = this.vault.fromY + (this.vault.toY - this.vault.fromY) * eased;
+      // A half-sine lifts the eye over the obstacle and sets it down again.
+      const lift = Math.sin(t * Math.PI) * 0.55;
+      this.eyeHeight = EYE_HEIGHT_BY_STANCE[2] + lift;
+      this.speed = 0;
+      if (t >= 1) {
+        this.vault = null;
+        this.eyeHeight = EYE_HEIGHT_BY_STANCE[this.stance];
+      }
+      this.updateStamina(dt, false, mods.staminaDrain, mods.staminaRegen);
+      return;
+    }
+
+    // --- velocity ----------------------------------------------------------
+    //
+    // The stick sets a target velocity; the body accelerates towards it. That
+    // one indirection is what gives movement weight: a released stick coasts,
+    // a reversal has to pay for the old direction first, and a tap produces a
+    // nudge rather than a teleport.
+    const cos = Math.cos(this.angle);
+    const sin = Math.sin(this.angle);
+    // Forward is +Y input; strafe is +X input, i.e. the camera's right vector.
+    const worldX = cos * moveY + -sin * moveX;
+    const worldY = sin * moveY + cos * moveX;
+    const norm = Math.hypot(worldX, worldY);
+    const dirX = norm > 0.001 ? worldX / norm : 0;
+    const dirY = norm > 0.001 ? worldY / norm : 0;
+
+    // Terrain cost: wading through water or scrambling over rubble is slow.
+    const terrainCost = map.moveCostOf(Math.floor(this.x), Math.floor(this.y));
+    const targetSpeed = (Math.min(1, inputMag) * speed) / Math.max(1, terrainCost);
+    const targetX = dirX * targetSpeed;
+    const targetY = dirY * targetSpeed;
+
+    // Which rate applies depends on what the player is asking for. Speeding up
+    // is responsive, slowing down carries, and turning around costs most.
+    let rate: number;
+    if (inputMag < 0.01) {
+      rate = DECELERATION;
+    } else {
+      const speedNow = Math.hypot(this.velX, this.velY);
+      const alignment = speedNow > 0.01
+        ? (this.velX * dirX + this.velY * dirY) / speedNow
+        : 1;
+      rate = alignment >= 0
+        ? ACCELERATION
+        : DECELERATION * REVERSAL_DRAG;
+    }
+
+    // Exponential approach, framed so it is identical at any frame rate: a
+    // fixed lerp factor would make the game handle differently at 30 and 60.
+    const blend = 1 - Math.exp(-rate * dt);
+    this.velX += (targetX - this.velX) * blend;
+    this.velY += (targetY - this.velY) * blend;
+
+    // Below a knot's width, stop. Otherwise the exponential leaves a residual
+    // creep that slides the player off ledges and keeps footstep audio going.
+    if (Math.hypot(this.velX, this.velY) < 0.02) {
+      this.velX = 0;
+      this.velY = 0;
+    }
+
+    const before = { x: this.x, y: this.y };
+    const moved = moveCircle(map, this.x, this.y, this.velX * dt, this.velY * dt, this.radius);
+    this.x = moved.x;
+    this.y = moved.y;
+
+    const travelled = Math.hypot(this.x - before.x, this.y - before.y);
+    this.speed = dt > 0 ? travelled / dt : 0;
+
+    // Walking into a wall has to kill the velocity into it, or the player
+    // keeps accelerating against the surface and shoots away the moment they
+    // clear its edge.
+    if (dt > 0 && travelled < Math.hypot(this.velX, this.velY) * dt * 0.5) {
+      this.velX = (this.x - before.x) / dt;
+      this.velY = (this.y - before.y) / dt;
+    }
+
+    // --- stamina -----------------------------------------------------------
+    this.updateStamina(dt, canSprint, mods.staminaDrain, mods.staminaRegen);
+
+    // --- camera bob & footsteps -------------------------------------------
+    if (travelled > 0.0001) {
+      this.bobPhase += travelled * (canSprint ? 7.5 : 5.5);
+      this.stepAccumulator += travelled;
+      const strideLength = this.stance === 0 ? 1.1 : this.stance === 1 ? 0.85 : canSprint ? 0.72 : 0.95;
+      if (this.stepAccumulator >= strideLength) {
+        this.stepAccumulator = 0;
+        this.emitFootstep(map, canSprint);
+      }
+    } else {
+      this.stepAccumulator = Math.max(0, this.stepAccumulator - dt * 0.2);
+    }
+
+    // --- eye height --------------------------------------------------------
+    const targetEye = EYE_HEIGHT_BY_STANCE[this.stance];
+    this.eyeHeight = damp(this.eyeHeight, targetEye, 9, dt);
+  }
+
+  private updateStamina(dt: number, sprinting: boolean, drainMul: number, regenMul: number): void {
+    if (this.staminaLockout > 0) this.staminaLockout -= dt;
+
+    if (sprinting) {
+      // Drain scales with load: a heavy runner gasses out fast.
+      const drain = (11 + this.loadFactor * 16) * drainMul;
+      this.stamina = Math.max(0, this.stamina - drain * dt);
+      if (this.stamina <= 0) {
+        // Hitting zero costs a recovery window before you can sprint again -
+        // it is what turns a chase into a decision instead of a hold-shift.
+        this.staminaLockout = 2.6;
+      }
+    } else {
+      const idleBonus = this.speed < 0.05 ? 1.5 : 1;
+      const regen = 9.5 * regenMul * idleBonus * (this.stance === 0 ? 1.35 : this.stance === 1 ? 1.15 : 1);
+      this.stamina = Math.min(100, this.stamina + regen * dt);
+    }
+  }
+
+  private emitFootstep(map: TileMap, sprinting: boolean): void {
+    const tile = map.at(Math.floor(this.x), Math.floor(this.y));
+    const surface = TILE_DEFS[tile]?.footstepLoudness ?? 1;
+    // Stance is the player's main volume control - crouching is quiet.
+    const stanceLoudness = this.stance === 0 ? 0.25 : this.stance === 1 ? 0.45 : sprinting ? 1.35 : 0.8;
+    const radius = 9 * stanceLoudness * surface;
+    this.bus.emit('sound:emit', {
+      x: this.x,
+      y: this.y,
+      radius,
+      intensity: clamp01(stanceLoudness * surface * 0.7),
+      kind: sprinting ? 'sprint' : 'footstep',
+      sourceId: this.id,
+    });
+  }
+
+  // =========================================================================
+  // Aim
+  // =========================================================================
+
+  /** Apply look input in radians, clamping pitch to a realistic range. */
+  look(deltaYaw: number, deltaPitch: number): void {
+    this.angle = wrapAngle(this.angle + deltaYaw);
+    this.pitch = clamp(this.pitch + deltaPitch, -0.62, 0.62);
+  }
+
+  /** Muzzle height in metres for the current stance. */
+  get muzzleHeight(): number {
+    return this.eyeHeight - 0.12;
+  }
+
+  /** Eye height expressed in tile units, which is what the camera wants. */
+  get eyeHeightTiles(): number {
+    return this.eyeHeight / METERS_PER_TILE;
+  }
+
+  // =========================================================================
+  // Damage feedback
+  // =========================================================================
+
+  onHit(attackerId: number, part: BodyPart, damage: number, penetrated: boolean, dirX: number, dirY: number): void {
+    void attackerId;
+    void penetrated;
+    // Taking fire interrupts whatever you were doing - no bandaging under fire.
+    this.cancelAction();
+    this.bus.emit('player:hit', {
+      amount: damage,
+      bodyPart: part,
+      fromX: this.x - dirX,
+      fromY: this.y - dirY,
+    });
+  }
+
+  /** Fall damage, applied when a drop or an explosion knocks the player down. */
+  applyImpact(force: number): void {
+    if (force < 0.2) return;
+    const damage = force * 18;
+    this.health.applyDamage('leftLeg', damage * 0.5, { fractureChance: clamp01(force - 0.5) * 0.5 });
+    this.health.applyDamage('rightLeg', damage * 0.5, { fractureChance: clamp01(force - 0.5) * 0.5 });
+  }
+}

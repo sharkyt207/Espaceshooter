@@ -1,0 +1,16 @@
+{
+  "name": "Greyzone.Runtime",
+  "rootNamespace": "Greyzone.Runtime",
+  "references": [
+    "Greyzone.Simulation"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

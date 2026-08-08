@@ -1,0 +1,1869 @@
+/*
+ * GRAYZONE PROTOCOL - user interface
+ *
+ * Design intent: a field terminal, not a game menu. Dense information, high
+ * contrast, no decoration that does not carry meaning. Everything is sized for
+ * a thumb in landscape, with a 44 px minimum touch target and safe-area
+ * padding so nothing sits under a notch or a gesture bar.
+ *
+ * Colour carries meaning consistently:
+ *   amber   - caution, timers, the raid itself
+ *   green   - safe, available, positive
+ *   red     - damage, loss, blocked
+ *   steel   - neutral chrome
+ */
+
+:root {
+  --bg-0: #0b0d10;
+  --bg-1: #12151a;
+  --bg-2: #191d24;
+  --bg-3: #222831;
+  --line: #2c333d;
+  --line-bright: #3d4653;
+
+  --text: #d6dce4;
+  --text-dim: #8b95a3;
+  --text-faint: #5b6472;
+
+  --accent: #c8913a;
+  --accent-dim: #7d5a24;
+  --good: #4f9e6a;
+  --bad: #b8453a;
+  --warn: #c8913a;
+  --info: #4f7d9e;
+
+  --radius: 4px;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+
+  --font: 'DIN Alternate', 'Roboto Condensed', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --mono: 'SF Mono', 'Roboto Mono', ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.35;
+  /* Touch controls need every gesture; the browser must not steal any. */
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: block;
+}
+
+.game-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #0b0d10;
+}
+
+/* The overlay canvas carries the viewmodel, crosshair and screen effects on
+   top of the GL world. It must not paint its own background, or it would hide
+   everything behind it. */
+.game-canvas.overlay {
+  background: transparent;
+  z-index: 1;
+}
+
+/* ==========================================================================
+   Rotation prompt - the game is landscape only
+   ========================================================================== */
+
+.rotate-prompt {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 18px;
+  background: var(--bg-0);
+  z-index: 999;
+  text-align: center;
+  padding: 24px;
+}
+
+.rotate-prompt .icon {
+  font-size: 52px;
+  animation: rotate-hint 2.4s ease-in-out infinite;
+}
+
+@keyframes rotate-hint {
+  0%, 45% { transform: rotate(0deg); }
+  55%, 100% { transform: rotate(90deg); }
+}
+
+@media (orientation: portrait) and (max-width: 900px) {
+  .rotate-prompt { display: flex; }
+}
+
+/* ==========================================================================
+   First-run primer
+   ========================================================================== */
+
+.primer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.primer-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+.primer-text { flex: 1; min-width: 0; max-width: 62ch; }
+
+.primer-text .eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.primer-text .title {
+  margin: 4px 0 8px;
+  font-size: clamp(17px, 3.2vw, 23px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-wrap: balance;
+}
+
+.primer-text p {
+  margin: 0 0 7px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.primer-figure {
+  flex: 0 0 auto;
+  width: min(38%, 300px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.primer-figure .caption {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* --- control layout diagram ---------------------------------------------- */
+
+.primer-figure .phone {
+  position: relative;
+  aspect-ratio: 2 / 1;
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+
+.pz {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px;
+  text-align: center;
+}
+
+.pz .l { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.pz .h { font-size: 8px; color: var(--text-faint); line-height: 1.2; }
+
+.pz.move {
+  left: 0;
+  background: rgba(79, 125, 158, 0.12);
+  border-right: 1px dashed var(--line-bright);
+  color: #7fa8c4;
+}
+
+.pz.look { right: 0; background: rgba(200, 145, 58, 0.09); color: var(--accent); }
+
+.pb {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(160, 172, 188, 0.4);
+  background: rgba(20, 24, 30, 0.9);
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.pb.fire { right: 6%; bottom: 10%; width: 26%; aspect-ratio: 1; border-color: rgba(200, 90, 70, 0.6); }
+.pb.ads { right: 36%; bottom: 14%; width: 18%; aspect-ratio: 1; }
+.pb.torch { left: 6%; bottom: 14%; width: 17%; aspect-ratio: 1; border-color: var(--accent-dim); color: var(--accent); }
+
+/* --- loop diagram --------------------------------------------------------- */
+
+.primer-figure .loop { display: flex; flex-direction: column; gap: 4px; }
+
+.ls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent-dim);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+
+.ls .n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.ls .l { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
+
+/* --- footer --------------------------------------------------------------- */
+
+.primer-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.primer-dots { flex: 1; display: flex; justify-content: center; gap: 8px; }
+
+.primer-dots .dot {
+  width: 22px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-bright);
+  cursor: pointer;
+}
+
+.primer-dots .dot.on { background: var(--accent); }
+
+@media (max-height: 430px) {
+  .primer-card { gap: 12px; }
+  .primer-text p { font-size: 11.5px; margin-bottom: 5px; }
+  .primer-figure { width: min(34%, 250px); }
+}
+
+/* ==========================================================================
+   Install hint
+   ========================================================================== */
+
+.install-banner {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + var(--safe-b));
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 460px);
+  padding: 7px 8px 7px 14px;
+  border: 1px solid var(--line-bright);
+  border-radius: 20px;
+  background: rgba(18, 21, 26, 0.94);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  font-size: 12px;
+  color: var(--text-dim);
+  animation: install-in 0.4s ease-out both;
+}
+
+@keyframes install-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .install-banner { animation: none; }
+}
+
+.install-banner .text { flex: 1; }
+.install-banner b { color: var(--text); font-weight: 600; }
+
+.install-banner .close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+/* ==========================================================================
+   Generic chrome
+   ========================================================================== */
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--line-bright);
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 11px 18px;
+  min-height: 44px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, transform 0.06s;
+}
+
+.btn:active, .btn.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+.btn.primary {
+  background: linear-gradient(180deg, #8a6526, #6b4d1c);
+  border-color: var(--accent);
+  color: #f4e6cd;
+}
+
+.btn.danger {
+  border-color: #7d2f27;
+  color: #e8b0a9;
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--text-dim);
+}
+
+/* Square icon buttons still need a thumb-sized hit box; without a min-width a
+   single glyph collapses the button to about 33 px. */
+.btn.icon { min-width: 44px; padding-left: 0; padding-right: 0; }
+
+.btn.small {
+  font-size: 12px;
+  padding: 7px 11px;
+  /* 40 is the floor at which a thumb reliably lands. Apple asks for 44 and
+     Google for 48; those are right for a document, but a game HUD trades some
+     of it back for density - below 40 the misses start. */
+  min-height: 40px;
+}
+
+.bar {
+  position: relative;
+  height: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+
+.bar.has-label { height: 16px; }
+
+.bar-fill {
+  height: 100%;
+  transition: width 0.18s linear;
+}
+
+.bar-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text);
+  text-shadow: 0 1px 2px #000;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--line-bright);
+  border-radius: 2px;
+  color: var(--text-dim);
+}
+
+/* ==========================================================================
+   Screen shell
+   ========================================================================== */
+
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(160deg, #0d1015, #090b0e 60%);
+  padding: calc(10px + var(--safe-t)) calc(14px + var(--safe-r)) calc(10px + var(--safe-b)) calc(14px + var(--safe-l));
+  z-index: 20;
+}
+
+.screen.hidden { display: none; }
+
+.screen-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.screen-title {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.screen-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  letter-spacing: 0.06em;
+}
+
+.screen-head .spacer { flex: 1; }
+
+.screen-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding-top: 10px;
+}
+
+.panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.panel-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 10px;
+}
+
+/* A block inside a panel body: no scrolling of its own, no padding, so
+   several can be stacked in one scroll container without fighting it. */
+.panel-inner { display: block; }
+
+.panel-body::-webkit-scrollbar { width: 6px; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--line-bright); border-radius: 3px; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+/* ==========================================================================
+   Hub: vertical navigation rail
+   ==========================================================================
+
+   Landscape on a phone gives roughly 390 logical pixels of height. A tab strip
+   across the top spends 50 of them on six words; on the side it spends none,
+   and it sits under the thumb that is already there. */
+
+.nav-rail {
+  flex: 0 0 auto;
+  width: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  scrollbar-width: none;
+}
+
+.nav-rail::-webkit-scrollbar { display: none; }
+
+.nav-item {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  /* Seven entries have to fit 316 px of content height on a landscape phone
+     without scrolling: 7 x 40 plus gaps lands at 304. */
+  min-height: 40px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-left: 2px solid transparent;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: center;
+}
+
+.nav-item .glyph { font-size: 15px; line-height: 1; }
+
+.nav-item .label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.15;
+}
+
+.nav-item.active {
+  background: var(--bg-3);
+  border-color: var(--line-bright);
+  border-left-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-item .badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #14171c;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 15px;
+}
+
+.hub-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 10px;
+}
+
+/* --- compact header: chips instead of a run-on line ---------------------- */
+
+.screen-head.compact { padding-bottom: 6px; }
+.screen-head.compact .screen-title { font-size: 15px; letter-spacing: 0.12em; }
+
+.screen-head.compact .screen-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 3px;
+}
+
+.screen-sub .chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 1px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-1);
+  white-space: nowrap;
+}
+
+.screen-sub .chip .k {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.screen-sub .chip .v {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.screen-sub .chip.risk { border-color: var(--accent-dim); }
+.screen-sub .chip.risk .v { color: var(--accent); }
+
+/* --- overview ------------------------------------------------------------ */
+
+.ov-operator {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ov-operator .row { display: flex; align-items: baseline; gap: 8px; }
+.ov-operator .grow { flex: 1; }
+.ov-operator .lvl { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.ov-operator .xp { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+
+.ov-operator .stats {
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-checks { display: flex; flex-direction: column; gap: 4px; }
+
+.ov-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--line-bright);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+}
+
+.ov-check .grow { flex: 1; min-width: 0; }
+.ov-check .title { font-size: 12px; font-weight: 600; }
+.ov-check .sub { font-size: 10px; color: var(--text-dim); }
+
+.ov-check .mark {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.ov-check.ok { border-left-color: var(--good); }
+.ov-check.ok .mark { color: var(--good); }
+.ov-check.warn { border-left-color: var(--warn); }
+.ov-check.warn .mark { color: var(--warn); }
+.ov-check.warn .sub { color: var(--warn); }
+.ov-check.bad { border-left-color: var(--bad); }
+.ov-check.bad .mark { color: var(--bad); }
+.ov-check.bad .sub { color: var(--bad); }
+
+.ov-activity {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 7px 9px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ov-activity.done { border-color: var(--good); }
+.ov-activity .row { display: flex; align-items: baseline; gap: 8px; }
+.ov-activity .grow { flex: 1; }
+.ov-activity .title { font-size: 12px; font-weight: 600; }
+.ov-activity .sub { font-size: 10px; color: var(--text-dim); }
+
+.ov-activity .clock {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-activity.done .clock { color: var(--good); }
+
+.ov-jumps { display: flex; gap: 6px; margin-top: 10px; }
+
+.tab {
+  flex: 1;
+  padding: 9px 6px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  text-align: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  cursor: pointer;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tab.active {
+  background: var(--bg-3);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  /* Without a gap a long value wraps flush against its label and the two read
+     as one word - "PrimärwaffeSG-545". */
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(44, 51, 61, 0.5);
+}
+
+.stat-row .label { flex: 0 0 auto; }
+.stat-row .value { text-align: right; }
+
+.stat-row .label { color: var(--text-dim); }
+.stat-row .value { font-family: var(--mono); color: var(--text); }
+.stat-row .value.good { color: var(--good); }
+.stat-row .value.bad { color: var(--bad); }
+
+.empty-note {
+  color: var(--text-faint);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px 12px;
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Inventory grid
+   ========================================================================== */
+
+.inv-grid {
+  display: grid;
+  gap: 2px;
+  background: var(--bg-0);
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  width: max-content;
+}
+
+.inv-cell {
+  width: 38px;
+  height: 38px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 2px;
+}
+
+.inv-item {
+  position: relative;
+  border: 1px solid var(--line-bright);
+  border-radius: 2px;
+  background: var(--bg-3);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.inv-item:active { transform: scale(0.97); }
+
+.inv-item.selected {
+  border-color: var(--accent);
+  background: #2c2314;
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+/*
+ * Cell labels have to survive a 38 px square. Clamping to two lines with an
+ * ellipsis beats wrapping mid-word, which produced unreadable fragments.
+ */
+.inv-item .name {
+  font-size: 8.5px;
+  line-height: 1.15;
+  letter-spacing: 0;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: normal;
+  padding-left: 2px;
+}
+
+.inv-item .count {
+  align-self: flex-end;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--text);
+  background: rgba(9, 11, 14, 0.78);
+  border-radius: 2px;
+  padding: 0 2px;
+  line-height: 1.25;
+}
+
+.inv-item .rarity-strip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+}
+
+.inv-item .cond-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--good);
+}
+
+.inv-item.fresh::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ==========================================================================
+   Item detail
+   ========================================================================== */
+
+.item-detail { display: flex; flex-direction: column; gap: 8px; }
+.item-detail h3 { margin: 0; font-size: 15px; letter-spacing: 0.05em; }
+.item-detail .desc { font-size: 12px; color: var(--text-dim); line-height: 1.45; }
+.item-detail .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ==========================================================================
+   Lists (traders, quests, hideout, crafting)
+   ========================================================================== */
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  margin-bottom: 6px;
+  min-height: 46px;
+}
+
+.list-row.clickable { cursor: pointer; }
+.list-row.clickable:active { background: var(--bg-3); }
+.list-row.locked { opacity: 0.45; }
+
+.list-row .grow { flex: 1; min-width: 0; }
+.list-row .title { font-size: 13px; font-weight: 600; letter-spacing: 0.03em; }
+.list-row .sub { font-size: 11px; color: var(--text-dim); }
+
+/* flex-shrink is the trap here. Without `flex: 0 0 auto` the price is squeezed
+   narrower than its own text, and `nowrap` then spills it straight over the
+   item name to its left - two readable strings painted on top of each other. */
+.list-row .price {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.list-row .btn,
+.list-row .tag { flex: 0 0 auto; }
+
+/* Long unbreakable words in a narrow flex child overflow their box rather than
+   wrapping, and overflow in a flex row means overlapping siblings.
+   `break-word` rather than `anywhere`: the latter also breaks ordinary words
+   mid-syllable the moment a column gets tight. */
+.list-row .title,
+.list-row .sub {
+  /* German compounds are long enough to overflow a narrow column, and
+     `break-word` splits them at an arbitrary letter - "Wertgegenstä nde".
+     Hyphenation breaks at syllables instead and marks the break, which is
+     what a reader expects. `anywhere` stays as the last resort for strings
+     with no syllables to find, like an item code. */
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
+
+/* --- the base, drawn ----------------------------------------------------- */
+
+.base-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px;
+  display: flex;
+}
+
+.base-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: var(--radius);
+  /* Rooms are tapped, so the browser must not treat a tap as the start of a
+     scroll or a double-tap zoom. */
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+/* --- people -------------------------------------------------------------- */
+
+.portrait {
+  display: block;
+  image-rendering: auto;
+}
+
+.trader-face {
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  line-height: 0;
+  /* Cropped to the head. The full canvas includes shoulders, which at list
+     size becomes an unreadable smear. */
+  align-self: flex-start;
+}
+
+.trader-face .portrait { margin-bottom: -14%; }
+.trader-face.small { border-color: transparent; opacity: 0.9; }
+
+.trader-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trader-header .face {
+  flex: 0 0 auto;
+  border: 1px solid var(--line-bright);
+  border-radius: 3px;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.trader-header .grow { flex: 1; min-width: 0; }
+
+.trader-header .name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.trader-header .role {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-top: 1px;
+}
+
+.trader-header .quote {
+  margin-top: 7px;
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+/* --- shop rows ----------------------------------------------------------- */
+
+.trade-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  margin-bottom: 6px;
+}
+
+.trade-row .title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  overflow-wrap: anywhere;
+}
+
+.trade-row .detail {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.trade-row .foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.trade-row .foot .spacer { flex: 1; }
+.trade-row .note { font-size: 10px; color: var(--text-faint); white-space: nowrap; }
+
+.trade-row .price {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.trade-row .btn { flex: 0 0 auto; min-height: 40px; padding: 6px 12px; font-size: 11px; }
+
+/* ==========================================================================
+   In-raid HUD
+   ========================================================================== */
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  padding: calc(8px + var(--safe-t)) calc(12px + var(--safe-r)) calc(8px + var(--safe-b)) calc(12px + var(--safe-l));
+  font-family: var(--font);
+}
+
+.hud.hidden { display: none; }
+
+.hud-top {
+  position: absolute;
+  top: calc(8px + var(--safe-t));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(9, 11, 14, 0.72);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 14px;
+}
+
+.hud-timer {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.hud-timer.urgent { color: var(--bad); animation: pulse 1s ease-in-out infinite; }
+
+@keyframes pulse { 50% { opacity: 0.45; } }
+
+.hud-contacts { font-size: 11px; letter-spacing: 0.1em; color: var(--text-dim); }
+.hud-contacts.hot { color: var(--bad); }
+
+/* Conditions sit between the clock and the contact count because they change
+   how both of those read: 40 metres of visibility makes a quiet map a lie. */
+.hud-conditions {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding: 0 12px;
+}
+
+.hud-conditions.dark { color: var(--accent); }
+
+/* --- compass ------------------------------------------------------------- */
+
+.hud-compass {
+  position: absolute;
+  top: calc(46px + var(--safe-t));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(46vw, 380px);
+  height: 22px;
+  overflow: hidden;
+  border-top: 1px solid rgba(120, 132, 148, 0.35);
+  border-bottom: 1px solid rgba(120, 132, 148, 0.35);
+  mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent);
+}
+
+.hud-compass .ticks {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.hud-compass .marker {
+  position: absolute;
+  top: 2px;
+  font-size: 11px;
+  transform: translateX(-50%);
+}
+
+/* --- bottom-left vitals -------------------------------------------------- */
+
+.hud-vitals {
+  position: absolute;
+  left: calc(12px + var(--safe-l));
+  bottom: calc(10px + var(--safe-b));
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: rgba(9, 11, 14, 0.66);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+
+.hud-vitals .row { display: flex; align-items: center; gap: 7px; }
+.hud-vitals .row .key {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  color: var(--text-faint);
+  width: 26px;
+  flex: 0 0 auto;
+}
+.hud-vitals .row .bar { flex: 1; }
+
+.hud-status {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--bad);
+  min-height: 14px;
+}
+
+/* --- body diagram -------------------------------------------------------- */
+
+.hud-body {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.hud-body .part {
+  height: 5px;
+  border-radius: 1px;
+  background: var(--good);
+}
+
+.hud-body .part.warn { background: var(--warn); }
+.hud-body .part.bad { background: var(--bad); }
+.hud-body .part.out { background: #3a2020; }
+
+/* --- weapon block -------------------------------------------------------- */
+
+/*
+ * The weapon block sits bottom-centre rather than bottom-right: the right side
+ * belongs to the thumb cluster, and an ammo counter hidden under a finger is
+ * worse than useless.
+ */
+.hud-weapon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + var(--safe-b));
+  text-align: center;
+  background: rgba(9, 11, 14, 0.66);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 5px 18px;
+  min-width: 132px;
+}
+
+.hud-ammo {
+  font-family: var(--mono);
+  font-size: 25px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+
+.hud-ammo .reserve { font-size: 14px; color: var(--text-dim); }
+.hud-ammo.low { color: var(--warn); }
+.hud-ammo.empty { color: var(--bad); }
+
+.hud-weapon-name { font-size: 11px; letter-spacing: 0.06em; color: var(--text-dim); }
+.hud-firemode { font-size: 10px; letter-spacing: 0.14em; color: var(--accent); }
+
+/* --- prompts and notifications ------------------------------------------- */
+
+.hud-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 26%;
+  transform: translateX(-50%);
+  background: rgba(9, 11, 14, 0.8);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 7px 16px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.hud-prompt.hidden { display: none; }
+
+.hud-action {
+  position: absolute;
+  left: 50%;
+  bottom: 34%;
+  transform: translateX(-50%);
+  width: min(48vw, 320px);
+  text-align: center;
+}
+
+.hud-action.hidden { display: none; }
+.hud-action .label { font-size: 12px; letter-spacing: 0.1em; margin-bottom: 4px; }
+
+.hud-notifications {
+  position: absolute;
+  top: calc(74px + var(--safe-t));
+  /* Clear of the right-hand control column.
+     Notifications are transient and the buttons are permanent, so the
+     transient thing moves. Anchored past the widest button the default layout
+     puts in that column, with room for the largest size the editor allows. */
+  right: calc(12px + var(--safe-r) + 12vh);
+  width: min(34vw, 280px);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.notification {
+  background: rgba(9, 11, 14, 0.82);
+  border-left: 2px solid var(--info);
+  padding: 5px 10px;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  border-radius: 2px;
+  animation: notify-in 0.16s ease-out;
+  max-width: 100%;
+}
+
+.notification.good { border-left-color: var(--good); }
+.notification.bad { border-left-color: var(--bad); }
+.notification.warn { border-left-color: var(--warn); }
+
+@keyframes notify-in {
+  from { opacity: 0; transform: translateX(12px); }
+}
+
+/* --- touch controls ------------------------------------------------------ */
+
+.touch-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
+  z-index: 5;
+}
+
+.touch-btn {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid rgba(160, 172, 188, 0.35);
+  background: rgba(20, 24, 30, 0.5);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  user-select: none;
+}
+
+.touch-btn.is-active {
+  background: rgba(200, 145, 58, 0.42);
+  border-color: var(--accent);
+}
+
+.touch-btn.fire {
+  right: calc(22px + var(--safe-r));
+  bottom: calc(22px + var(--safe-b));
+  width: 92px;
+  height: 92px;
+  font-size: 13px;
+  border-color: rgba(200, 90, 70, 0.5);
+}
+
+.touch-btn.ads {
+  right: calc(126px + var(--safe-r));
+  bottom: calc(30px + var(--safe-b));
+  width: 66px;
+  height: 66px;
+}
+
+.touch-btn.reload {
+  right: calc(30px + var(--safe-r));
+  bottom: calc(126px + var(--safe-b));
+  width: 62px;
+  height: 62px;
+}
+
+.touch-btn.stance {
+  right: calc(122px + var(--safe-r));
+  bottom: calc(108px + var(--safe-b));
+  width: 54px;
+  height: 54px;
+}
+
+.touch-btn.jump {
+  /* A fallback only. `applyTouchLayout` overrides position and size from the
+     player's layout on the first frame; this exists so the button is not
+     stacked at the origin for that frame, and for the software path when no
+     layout has been applied yet. */
+  right: calc(258px + var(--safe-r));
+  bottom: calc(168px + var(--safe-b));
+  width: 50px;
+  height: 50px;
+}
+
+.touch-btn.interact {
+  right: calc(196px + var(--safe-r));
+  bottom: calc(74px + var(--safe-b));
+  width: 58px;
+  height: 58px;
+  border-color: rgba(200, 145, 58, 0.5);
+}
+
+.touch-btn.heal {
+  right: calc(186px + var(--safe-r));
+  bottom: calc(148px + var(--safe-b));
+  width: 50px;
+  height: 50px;
+}
+
+.touch-btn.swap {
+  right: calc(100px + var(--safe-r));
+  bottom: calc(178px + var(--safe-b));
+  width: 50px;
+  height: 50px;
+}
+
+.touch-btn.firemode {
+  right: calc(28px + var(--safe-r));
+  bottom: calc(198px + var(--safe-b));
+  width: 46px;
+  height: 46px;
+  font-size: 9px;
+}
+
+/* Left-hand side, out of the firing thumb's way: the light is a deliberate
+   act, never something you hit by accident while shooting. */
+.touch-btn.torch {
+  left: calc(18px + var(--safe-l));
+  bottom: calc(206px + var(--safe-b));
+  width: 46px;
+  height: 46px;
+  font-size: 9px;
+}
+
+.touch-btn.torch.active {
+  background: rgba(200, 145, 58, 0.45);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Dimmed rather than hidden: the player should know the button exists and
+   that the weapon in their hands has nothing to switch on. */
+.touch-btn.torch.unavailable { opacity: 0.3; }
+
+.touch-btn.lean-left {
+  left: calc(18px + var(--safe-l));
+  bottom: calc(150px + var(--safe-b));
+  width: 46px;
+  height: 46px;
+}
+
+.touch-btn.lean-right {
+  left: calc(74px + var(--safe-l));
+  bottom: calc(150px + var(--safe-b));
+  width: 46px;
+  height: 46px;
+}
+
+.touch-corner {
+  position: absolute;
+  top: calc(8px + var(--safe-t));
+  left: calc(12px + var(--safe-l));
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.touch-corner .touch-btn {
+  position: static;
+  width: 46px;
+  height: 40px;
+  border-radius: var(--radius);
+  font-size: 10px;
+}
+
+.stick-visual {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 1px solid rgba(160, 172, 188, 0.28);
+  background: rgba(20, 24, 30, 0.22);
+  width: 132px;
+  height: 132px;
+  margin-left: -66px;
+  margin-top: -66px;
+  display: none;
+}
+
+.stick-visual.active { display: block; }
+
+.stick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52px;
+  height: 52px;
+  margin-left: -26px;
+  margin-top: -26px;
+  border-radius: 50%;
+  background: rgba(200, 145, 58, 0.3);
+  border: 1px solid rgba(200, 145, 58, 0.6);
+}
+
+/* --- debug --------------------------------------------------------------- */
+
+.hud-debug {
+  position: absolute;
+  left: calc(12px + var(--safe-l));
+  top: calc(8px + var(--safe-t));
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  background: rgba(9, 11, 14, 0.6);
+  padding: 3px 6px;
+  border-radius: 2px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.hud-debug.hidden { display: none; }
+
+/* ==========================================================================
+   Map screen
+   ========================================================================== */
+
+.map-canvas {
+  display: block;
+  margin: 0 auto;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  /* No `image-rendering: pixelated` here any more. The canvas is drawn at the
+     size it is displayed at, so there is nothing to resample - and refusing to
+     blend would only harden the edges of the zone names. */
+}
+
+/* ==========================================================================
+   Menu / results
+   ========================================================================== */
+
+/*
+ * Centred column that degrades safely when it outgrows the viewport.
+ *
+ * `justify-content: center` on an overflowing flex column pushes the first
+ * items past the top edge where they can never be reached - on a 400 px
+ * landscape phone that hid the pause menu's buttons. `safe center` falls back
+ * to start alignment exactly when overflow would occur.
+ *
+ * Deliberately *not* a scroll container: menu buttons that can slide under the
+ * thumb are worse than a slightly cramped layout, so the short-viewport media
+ * query trims the content instead.
+ */
+.menu-hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  justify-content: safe center;
+  gap: 6px;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.menu-hero .title {
+  font-size: clamp(30px, 7vw, 62px);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--text);
+  text-shadow: 0 0 24px rgba(200, 145, 58, 0.28);
+}
+
+.menu-hero .subtitle {
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.menu-hero .tagline {
+  font-size: 13px;
+  color: var(--text-dim);
+  max-width: 520px;
+  margin-top: 10px;
+  line-height: 1.6;
+}
+
+.menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, 70vw);
+  margin-top: 20px;
+}
+
+/* Pinned to the bottom rather than flowing after the buttons: as a flow item
+   it pushed the hero past the viewport on a 360 px-tall phone, and a centred
+   hero that overflows is worse than a footer that overlaps nothing. */
+.menu-colophon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(8px + var(--safe-b));
+  width: min(620px, calc(100% - 32px));
+  opacity: 0.6;
+  text-align: center;
+  line-height: 1.4;
+}
+
+.result-banner {
+  text-align: center;
+  padding: 14px;
+  font-size: clamp(22px, 4vw, 38px);
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.result-banner.survived { color: var(--good); }
+.result-banner.died { color: var(--bad); }
+
+.result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.result-tile {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.result-tile .k {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+
+.result-tile .v {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+/* --- deployment: time of day --------------------------------------------- */
+
+.time-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.time-chip {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 8px 10px;
+  cursor: pointer;
+  min-height: 44px;
+}
+
+.time-chip .name {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  /* "Abenddämmerung" is long and must not spill out of its chip. */
+  overflow-wrap: anywhere;
+}
+
+.time-chip .bonus {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 2px;
+}
+
+.time-chip.selected {
+  border-color: var(--accent);
+  background: rgba(200, 145, 58, 0.12);
+}
+
+.time-chip.selected .bonus { color: var(--accent); }
+
+/* ==========================================================================
+   Compact layout for short viewports
+   ========================================================================== */
+
+/* Every phone in landscape is under 430 px tall, so this is not an edge case -
+   it is the layout almost every player sees. */
+@media (max-height: 430px) {
+  body { font-size: 13px; }
+  .inv-cell { width: 36px; height: 36px; }
+  .touch-btn.fire { width: 76px; height: 76px; }
+  .hud-vitals { width: 164px; padding: 6px 8px; }
+  .screen-title { font-size: 16px; }
+
+  /* Menus have to fit without scrolling on a short landscape phone - but not
+     by shrinking buttons below the size a thumb can hit. Density comes out of
+     padding and type size instead. */
+  .btn { min-height: 44px; padding: 8px 14px; font-size: 13px; }
+  .btn.small { min-height: 40px; padding: 6px 10px; }
+  .menu-actions { gap: 6px; margin-top: 10px; }
+  .menu-hero .tagline { display: none; }
+  /* Two lines of colophon is more height than a 360 px phone can spare. */
+  .menu-colophon { display: none; }
+
+  /* The debrief banner is the least informative element on the screen, so it
+     is the first thing to give up height to the figures underneath. */
+  .result-banner { padding: 4px; font-size: clamp(17px, 3.4vw, 26px); letter-spacing: 0.14em; }
+  .result-tile { padding: 6px 9px; }
+  .result-tile .v { font-size: 16px; }
+  .result-grid { gap: 6px; }
+}
+
+/* ==========================================================================
+   Style-specific chrome
+   ==========================================================================
+
+   Almost all of a style is carried by the custom properties, because every
+   screen is already written against them. What lives here is the handful of
+   things a colour cannot say: whether a panel has weight behind it, whether
+   the interface is drawn or photographed, how hard the corners are.
+
+   Scoped on the `data-style` attribute that `applyStyleToDocument` sets, so
+   adding a style means adding a block here and nothing else. */
+
+/* Comic: everything is drawn, so everything has a line around it and sits on
+   a hard drop shadow rather than a soft one. The offset shadow with no blur is
+   the single most characteristic thing here - it is how a printed panel is
+   separated from the page, and a blurred one would immediately read as a
+   normal interface with bright colours. */
+[data-style='comic'] .panel,
+[data-style='comic'] .card,
+[data-style='comic'] .list-row {
+  border-width: 2px;
+  box-shadow: var(--chrome-glow);
+}
+
+[data-style='comic'] .btn {
+  border-width: 2px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  box-shadow: 0 3px 0 rgba(11, 12, 18, 0.85);
+}
+
+[data-style='comic'] .btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 rgba(11, 12, 18, 0.85);
+}
+
+[data-style='comic'] .panel-head {
+  border-bottom-width: 2px;
+  font-weight: 700;
+}
+
+[data-style='comic'] .title,
+[data-style='comic'] h1,
+[data-style='comic'] h2,
+[data-style='comic'] h3 {
+  font-weight: 700;
+}
+
+/* Futuristisch: panels are lit from within rather than drawn. A hairline in
+   the accent colour plus a soft cast below, and a gradient wash on every
+   header so the chrome looks like a surface with a light behind it. */
+[data-style='futuristisch'] .panel,
+[data-style='futuristisch'] .card {
+  box-shadow: var(--chrome-glow);
+}
+
+[data-style='futuristisch'] .btn.primary {
+  box-shadow: 0 0 14px rgba(58, 216, 232, 0.35);
+}
+
+[data-style='futuristisch'] .panel-head {
+  background: linear-gradient(180deg, rgba(58, 216, 232, 0.11), transparent);
+  letter-spacing: 0.1em;
+}
+
+[data-style='futuristisch'] .nav-item.active {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Realistisch: nothing. The absence is the position - no glow, no line weight,
+   no letter-spacing. Listed explicitly so the next person does not assume it
+   was forgotten. */
+
+/* ==========================================================================
+   Range sliders
+   ==========================================================================
+
+   The browser default is a blue that belongs to no style in this game, and it
+   is the one control the settings screens are made of - so it undoes the
+   palette on the exact screen where a player is judging it.
+
+   Track and thumb have to be styled per engine: WebKit and Blink use
+   `::-webkit-slider-*`, Gecko uses `::-moz-range-*`, and neither understands
+   the other's selector. They cannot be combined into one rule - a selector
+   list containing an unknown pseudo-element is dropped entirely by both. */
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 150px;
+  height: 22px;
+  background: transparent;
+  cursor: pointer;
+  /* The thumb has to be reachable by a thumb: 22px of track is not, so the
+     element is padded out to a comfortable target while the visible rail
+     stays thin. */
+  touch-action: pan-y;
+}
+
+.slider.mini { width: 72px; }
+
+.slider::-webkit-slider-runnable-track {
+  height: 3px;
+  background: var(--line-bright);
+  border-radius: 2px;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7.5px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.slider::-moz-range-track {
+  height: 3px;
+  background: var(--line-bright);
+  border-radius: 2px;
+}
+
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.slider:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); outline-offset: 2px; }
+.slider:focus-visible::-moz-range-thumb { outline: 2px solid var(--text); outline-offset: 2px; }

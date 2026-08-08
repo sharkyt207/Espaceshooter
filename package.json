@@ -1,0 +1,26 @@
+{
+  "name": "grayzone-protocol",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GRAYZONE PROTOCOL - Mobile PvE Extraction Shooter Prototype (technical feasibility study)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && node scripts/build-icons.mjs && vite build && node scripts/build-sw.mjs",
+    "preview": "vite preview --host",
+    "viewports": "node tests/viewports.mjs",
+    "smoke": "node tests/smoke.mjs",
+    "renderers": "node tests/renderers.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
+    "icons": "node scripts/build-icons.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build",
+    "offline": "node tests/offline.mjs",
+    "pwa": "node tests/pwa.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
