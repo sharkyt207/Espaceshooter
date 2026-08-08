@@ -26,6 +26,7 @@
 
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { findChromium } from './browser.mjs';
 
 const argOf = (name, fallback) => {
   const i = process.argv.indexOf(name);
@@ -34,7 +35,7 @@ const argOf = (name, fallback) => {
 
 const URL = argOf('--url', 'http://127.0.0.1:4173/');
 const OUT = argOf('--out', './dist/renderers');
-const EXECUTABLE = process.env.CHROMIUM_PATH || undefined;
+const EXECUTABLE = findChromium();
 
 /** Grid the frame is sampled on. Coarse on purpose: this compares layout. */
 const COLS = 8;

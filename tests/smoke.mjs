@@ -17,6 +17,7 @@
 
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { findChromium } from './browser.mjs';
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => {
@@ -26,7 +27,7 @@ const argOf = (name, fallback) => {
 
 const URL = argOf('--url', 'http://localhost:4173/');
 const OUT = argOf('--out', './dist/smoke');
-const EXECUTABLE = process.env.CHROMIUM_PATH || undefined;
+const EXECUTABLE = findChromium();
 
 mkdirSync(OUT, { recursive: true });
 
@@ -59,9 +60,53 @@ page.on('pageerror', (e) => {
   errors.push(`[pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(0, 6).join('\n')}`);
 });
 
+/**
+ * Capture one step, with the render loop held still for the duration.
+ *
+ * Headless Chromium composites in software, and this raid draws a full-screen
+ * canvas every frame. The game's own budget is fine - around 1.5 ms of
+ * simulation and 1.5 ms of drawing, measured under sustained fire with all
+ * twenty-six hostiles engaged - but the compositor behind it needs roughly a
+ * hundred milliseconds per frame, and `page.screenshot` has to go through that
+ * same compositor. Against a canvas that never stops changing, it can starve
+ * indefinitely; it was timing out at thirty seconds.
+ *
+ * This never showed up before because the player used to die partway through
+ * and the raid would end, leaving a static screen for every later capture. Now
+ * the player survives the whole walk, the raid never stops, and the contention
+ * is continuous. So: stop the loop, take the picture, start it again. The
+ * frame on screen is already rendered, so the capture is unchanged, and every
+ * performance number is sampled outside this helper and so is untouched.
+ *
+ * Holding the loop still fixes most of it but not all - roughly one run in
+ * four still lost a capture, at whichever step happened to land while the
+ * rasteriser was behind. That residue is contention inside the browser rather
+ * than anything the game is doing, so it gets a retry instead of a fix: a
+ * short settle, then one more attempt. If both fail, the failure is real and
+ * says which step it was.
+ */
 const shot = async (name) => {
   step++;
-  await page.screenshot({ path: `${OUT}/${String(step).padStart(2, '0')}-${name}.png` });
+  const path = `${OUT}/${String(step).padStart(2, '0')}-${name}.png`;
+  await page.evaluate(() => window.game?.loop?.stop());
+  try {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await page.screenshot({ path, timeout: 15000 });
+        return;
+      } catch (err) {
+        // Name the step. A bare "page.screenshot: Timeout" says nothing about
+        // where the suite got to, and the answer to "which screenshot" is the
+        // whole diagnosis.
+        if (attempt === 2) {
+          throw new Error(`screenshot "${name}" (step ${step}) failed twice: ${err.message}`);
+        }
+        await page.waitForTimeout(1500);
+      }
+    }
+  } finally {
+    await page.evaluate(() => window.game?.loop?.start());
+  }
 };
 
 const visibleScreens = () =>
@@ -94,23 +139,49 @@ const tab = (label) =>
  * is the thing under test here - this walks the interface and the raid
  * lifecycle, and dying mid-walk is noise.
  *
- * The check is not optional. The first version of this wrote `part.max` under
- * the wrong name, so every part's hp became undefined - which did not heal the
- * player, it corrupted them, and swapped one flaky step for another. A silent
- * no-op is worse than the flake it replaced.
+ * Topping the player up at each step is not enough, and the reason is worth
+ * recording. This used to heal at eight checkpoints and hope the player
+ * survived the gaps, which held only for as long as the AI was harmless. The
+ * moment the AI started genuinely closing ground and shooting from cover, the
+ * gaps became lethal and the suite began failing at whichever step happened to
+ * be unlucky - the map "not opening" one run, the inventory the next. A
+ * wandering failure is the signature of a race, not of the thing it points at,
+ * and chasing it step by step would have meant tuning timings forever.
+ *
+ * So the player is taken out of the fight once, at the first call, by making
+ * the incoming-damage path a no-op for them. Everything else stays live: the
+ * hostiles still hunt, still shoot, still cost frame time. Nothing here
+ * asserts on the player taking damage, so nothing is lost by removing them as
+ * a target, and the AI being lethal is now a fact about the game rather than a
+ * hazard for the test.
+ *
+ * The healthy-player check is not optional. The first version of this wrote
+ * `part.max` under the wrong name, so every part's hp became undefined - which
+ * did not heal the player, it corrupted them, and swapped one flaky step for
+ * another. A silent no-op is worse than the flake it replaced.
  */
 const keepAlive = async () => {
   const state = await page.evaluate(() => {
     const s = window.game.session;
     if (!s) return null;
-    for (const part of Object.values(s.player.health.parts)) {
+
+    // Install once per raid. `__smokeGuarded` is stamped on the health system
+    // itself, so a new raid gets a fresh (unguarded) one and re-arms here.
+    const health = s.player.health;
+    if (!health.__smokeGuarded) {
+      health.__smokeGuarded = true;
+      health.applyDamage = () => {}; // returns void in the real thing
+      health.kill = () => {};
+    }
+
+    for (const part of Object.values(health.parts)) {
       part.hp = part.max;
       part.lightBleeds = 0;
       part.heavyBleeds = 0;
       part.fractured = false;
     }
     s.player.stamina = 100;
-    return { hp: s.player.health.totalHp, alive: s.player.alive };
+    return { hp: health.totalHp, alive: s.player.alive };
   });
   if (state) {
     assert(
@@ -371,6 +442,16 @@ try {
   await page.waitForTimeout(700);
   await page.mouse.up();
   await page.waitForTimeout(500);
+  const underFire = await page.evaluate(() => ({
+    fps: window.game.loop.stats.fps,
+    sim: window.game.loop.stats.simMs,
+    draw: window.game.loop.stats.renderMs,
+    ai: window.game.session ? window.game.session.ai.aliveCount : 0,
+  }));
+  console.log(
+    `under fire: ${underFire.fps.toFixed(1)} fps  sim ${underFire.sim.toFixed(2)} ms  ` +
+      `draw ${underFire.draw.toFixed(2)} ms  (${underFire.ai} AI alive)`,
+  );
   await shot('raid-fired');
 
   await page.keyboard.press('KeyR');

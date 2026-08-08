@@ -19,6 +19,7 @@
 
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { findChromium } from './browser.mjs';
 
 const argOf = (name, fallback) => {
   const i = process.argv.indexOf(name);
@@ -27,7 +28,7 @@ const argOf = (name, fallback) => {
 
 const URL = argOf('--url', 'http://127.0.0.1:4173/');
 const OUT = argOf('--out', './dist/styles');
-const EXECUTABLE = process.env.CHROMIUM_PATH || undefined;
+const EXECUTABLE = findChromium();
 
 const STYLES = ['comic', 'futuristisch', 'realistisch'];
 

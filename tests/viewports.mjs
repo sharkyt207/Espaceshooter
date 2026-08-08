@@ -23,6 +23,7 @@
 
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
+import { findChromium } from './browser.mjs';
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => {
@@ -50,7 +51,7 @@ const problems = [];
 
 for (const device of DEVICES) {
   const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH || undefined,
+    executablePath: findChromium(),
     args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
   });
   const context = await browser.newContext({
