@@ -317,6 +317,104 @@ try {
   await page.evaluate(() => { if (window.game.session) window.game.session.player.pitch = 0; });
   console.log(`aim: drag down -> ${draggedDown.toFixed(3)} rad, drag up -> ${draggedUp.toFixed(3)} rad`);
 
+  // --- aim assist actually assists -----------------------------------------
+  //
+  // `aimAssistActive` was read by the look pipeline and set by nothing, so the
+  // slider in the controls screen moved a number that could never reach the
+  // arithmetic. Two halves to check, because either alone would still pass
+  // with the bug: the world has to notice a target under the crosshair, and
+  // noticing has to slow the turn down.
+  await keepAlive();
+  const assist = await page.evaluate(async () => {
+    const g = window.game;
+    if (!g.session) return null;
+    const s = g.session;
+
+    // Put a live hostile exactly on the crosshair, eight tiles out.
+    const enemy = s.ai.enemies.find((e) => e.alive);
+    if (!enemy) return null;
+    s.player.pitch = 0;
+    s.player.angle = 0;
+    enemy.x = s.player.x + 8;
+    enemy.y = s.player.y;
+
+    const detected = s.crosshairOnTarget;
+    // And off it, by ninety degrees - same enemy, same distance.
+    s.player.angle = Math.PI / 2;
+    const detectedAway = s.crosshairOnTarget;
+    s.player.angle = 0;
+
+    const swing = async (active) => {
+      g.input.releaseAll();
+      g.input.aimAssistActive = active;
+      s.player.pitch = 0;
+      const canvas = document.querySelector('.game-canvas');
+      const x = window.innerWidth * 0.75;
+      const y = window.innerHeight * 0.5;
+      const opts = (cx, cy) => ({ pointerId: 1, clientX: cx, clientY: cy, bubbles: true, isPrimary: true });
+      canvas.dispatchEvent(new PointerEvent('pointerdown', opts(x, y)));
+      canvas.dispatchEvent(new PointerEvent('pointermove', opts(x, y + 90)));
+      canvas.dispatchEvent(new PointerEvent('pointerup', opts(x, y + 90)));
+      await new Promise((r) => setTimeout(r, 120));
+      const pitch = s.player.pitch;
+      g.input.aimAssistActive = false;
+      return Math.abs(pitch);
+    };
+
+    const free = await swing(false);
+    const slowed = await swing(true);
+    s.player.pitch = 0;
+    return { detected, detectedAway, free, slowed, strength: g.input.config.aimAssist };
+  });
+  assert(assist, 'aim assist check needs a live raid with a hostile in it');
+  assert(assist.detected, 'a hostile dead ahead in the open must register under the crosshair');
+  assert(!assist.detectedAway, 'a hostile ninety degrees off the crosshair must not register');
+  assert(assist.strength > 0, `the default profile should ship some assist, got ${assist.strength}`);
+  assert(
+    assist.slowed < assist.free * 0.995,
+    `assist must slow the turn (free ${assist.free.toFixed(4)} rad, ` +
+      `assisted ${assist.slowed.toFixed(4)} rad)`,
+  );
+  // It slows, it does not stop. An assist that eats the whole input is a
+  // different and much worse bug than one that does nothing.
+  assert(
+    assist.slowed > assist.free * 0.5,
+    `assist must stay subtle (free ${assist.free.toFixed(4)} rad, ` +
+      `assisted ${assist.slowed.toFixed(4)} rad)`,
+  );
+  // And the join between the two halves, which is the part that was actually
+  // missing. The checks above drive `aimAssistActive` by hand, so both would
+  // still pass with nothing in the frame loop setting it - which is precisely
+  // the state this arrived in. This asserts the game closes that loop itself.
+  const wired = await page.evaluate(async () => {
+    const g = window.game;
+    const s = g.session;
+    const enemy = s?.ai.enemies.find((e) => e.alive);
+    if (!enemy) return null;
+    s.player.angle = 0;
+    s.player.pitch = 0;
+    // Re-place each pass: the hostiles are live and walking, and a target that
+    // strolls out of a 2-degree window mid-check would read as a wiring fault.
+    for (let i = 0; i < 12; i++) {
+      enemy.x = s.player.x + 8;
+      enemy.y = s.player.y;
+      enemy.alive = true;
+      await new Promise((r) => setTimeout(r, 60));
+      if (g.input.aimAssistActive) return true;
+    }
+    return false;
+  });
+  assert(
+    wired,
+    'the frame loop must set aimAssistActive when a hostile is under the crosshair - ' +
+      'the assist slider is inert otherwise',
+  );
+  console.log(
+    `aim assist: on-target ${assist.detected}, off-target ${assist.detectedAway}, ` +
+      `turn ${assist.free.toFixed(3)} -> ${assist.slowed.toFixed(3)} rad ` +
+      `(${(assist.strength * 100).toFixed(0)}%), wired ${wired}`,
+  );
+
   // --- four fingers at once -------------------------------------------------
   //
   // The claim the whole input rewrite rests on: a finger walking, a finger

@@ -1,11 +1,12 @@
 import type { GameBus, SoundEventPayload } from '../core/GameEvents';
 import { SpatialHash } from '../core/SpatialHash';
 import { Rng } from '../core/Random';
-import { clamp01, distance } from '../core/Math2D';
+import { clamp01, distance, wrapAngle } from '../core/Math2D';
 import { generateMap, type GeneratedMap, type MapBlueprint } from '../world/MapGenerator';
 import { applyConditions, defaultConditions, type RaidConditions } from '../world/Conditions';
 import { CoverMap, NavGrid } from '../world/NavGrid';
 import type { TileMap } from '../world/TileMap';
+import { hasLineOfSight } from '../world/Raycast';
 import { BallisticsSystem } from '../combat/Ballistics';
 import type { Combatant } from '../combat/Combatant';
 import { EffectSystem } from '../render/Effects';
@@ -23,6 +24,20 @@ import { DynamicEventSystem } from './DynamicEvents';
 import type { BodyPart } from '../data/ItemTypes';
 import type { AudioEngine } from '../audio/AudioEngine';
 import { estimateOcclusion } from '../ai/Perception';
+
+/**
+ * Aim-assist window, as a half-angle in radians at one tile's range.
+ *
+ * A person is about 0.6 tiles across, so half a body at one tile subtends
+ * roughly 0.3 rad. This is a little wider, because the assist only slows the
+ * turn and being slightly generous about when to slow costs the player
+ * nothing.
+ */
+const ASSIST_ANGLE = 0.34;
+/** Floor on that window, so a far target does not become a pinpoint. */
+const ASSIST_MIN_ANGLE = 0.012;
+/** Beyond this there is nothing to help with. */
+const ASSIST_RANGE = 60;
 
 /**
  * RaidSession - one deployment, from insertion to extraction or death.
@@ -347,6 +362,47 @@ export class RaidSession {
   /** Current weapon dispersion in radians, for the dynamic crosshair. */
   get playerSpread(): number {
     return this.playerWeapon.currentSpread(this.fireContext());
+  }
+
+  /**
+   * Is the crosshair on a hostile the player can actually see?
+   *
+   * This is the whole input to aim assist, and it is worth being precise about
+   * what aim assist here does: it slows the turn rate while the crosshair is
+   * on a target, and does nothing else. It never moves the player's aim, never
+   * bends a bullet, never widens the hitbox. A thumb overshoots a distant
+   * target because the last few pixels of travel are worth several degrees;
+   * slowing that travel gives the player back the precision a mouse would have
+   * given them, without giving them the shot.
+   *
+   * The window is angular, not a screen radius, so it tightens with distance
+   * exactly as the target does. `ASSIST_ANGLE` is the half-width at one tile;
+   * dividing by distance keeps it roughly the angular size of a person, and
+   * the floor stops a target at forty tiles becoming an invisible pinpoint.
+   *
+   * Line of sight is checked last because it is the expensive part, and the
+   * angular test rejects almost everything first.
+   */
+  get crosshairOnTarget(): boolean {
+    const px = this.player.x;
+    const py = this.player.y;
+    const angle = this.player.angle;
+
+    for (const enemy of this.ai.enemies) {
+      if (!enemy.alive) continue;
+      const dx = enemy.x - px;
+      const dy = enemy.y - py;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 0.5 || dist > ASSIST_RANGE) continue;
+
+      // Half the angular width of a body at this range, floored so distant
+      // targets stay reachable rather than requiring pixel-perfect aim.
+      const window = Math.max(ASSIST_MIN_ANGLE, ASSIST_ANGLE / dist);
+      if (Math.abs(wrapAngle(Math.atan2(dy, dx) - angle)) > window) continue;
+
+      if (hasLineOfSight(this.map, px, py, enemy.x, enemy.y)) return true;
+    }
+    return false;
   }
 
   /** Cycle to the next weapon the player is carrying. */

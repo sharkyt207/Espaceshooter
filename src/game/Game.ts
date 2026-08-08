@@ -579,6 +579,13 @@ export class Game {
       // one ADS setting cannot serve both irons and glass.
       this.input.adsFactor = session.playerWeapon.adsProgress;
       this.input.magnification = session.playerWeapon.resolved?.zoom ?? 1;
+      // Aim assist. The input layer owns the slowdown but cannot see the
+      // world, so the one bit it needs - is the crosshair on someone - has to
+      // be handed to it from here. Skipped entirely when the player has turned
+      // the assist off, because the line-of-sight check is not free and there
+      // is no point paying for an answer nothing will read.
+      this.input.aimAssistActive =
+        this.input.config.aimAssist > 0 && session.crosshairOnTarget;
     } else {
       // The world keeps running while a menu is open: looting is not a
       // time-out, and that is the point.
