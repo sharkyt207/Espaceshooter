@@ -23,11 +23,18 @@ zwei Einstellungen in Deinem GitHub-Konto.
 Alles dafür Nötige liegt schon im Projekt (`.github/workflows/pages.yml`). Es
 fehlt nur die Freigabe:
 
+**Zuerst der Merge — ohne ihn passiert gar nichts.** Der Veröffentlichungs-
+Ablauf liegt auf dem Arbeitsbranch und löst nur bei einem Push auf `main` aus.
+Solange `main` ihn nicht enthält, gibt es keinen Workflow, keinen Lauf und
+folglich auch keine Seite. Das ist unabhängig davon, was unter *Pages*
+eingestellt ist.
+
 1. Auf **github.com/sharkyt207/Espaceshooter** gehen (Safari genügt, geht am
    iPhone).
-2. **Settings** → in der linken Liste **Pages**.
-3. Unter *Build and deployment* bei **Source** → **GitHub Actions** wählen.
-4. Den Branch `claude/mobile-extraction-shooter-15mgjf` nach `main` mergen.
+2. Den Branch `claude/mobile-extraction-shooter-15mgjf` nach `main`
+   **zusammenführen**.
+3. **Settings** → in der linken Liste **Pages**.
+4. Unter *Build and deployment* bei **Source** → **GitHub Actions** wählen.
 
 Danach baut GitHub das Spiel bei jedem Push selbst und legt es ab unter:
 
@@ -75,9 +82,17 @@ nicht an.
 | Spielstand bleibt | liegt lokal auf dem Gerät |
 | Aktualisiert sich | beim nächsten Start mit Netz, im Hintergrund |
 
-Geprüft, nicht behauptet: `tests/offline.mjs` lädt das Spiel, **kappt die
-Netzverbindung**, lädt neu und verlangt einen laufenden Einsatz mit Gegnern.
-Fünf Läufe grün mit dem Service Worker, fünf Läufe rot ohne ihn.
+Geprüft, nicht behauptet:
+
+- `tests/offline.mjs` lädt das Spiel, **kappt die Netzverbindung**, lädt neu und
+  verlangt einen laufenden Einsatz mit Gegnern. Fünf Läufe grün mit dem Service
+  Worker, fünf Läufe rot ohne ihn.
+- `tests/pwa.mjs` prüft dasselbe Bündel unter **genau dem Unterordner-Layout,
+  das GitHub Pages benutzt** (`/Espaceshooter/`): Manifest erreichbar, alle vier
+  Symbole liefern 200, `start_url` und `scope` zeigen in den Unterordner statt
+  auf die Domain-Wurzel, Vollbild und Querformat gesetzt, Service Worker
+  kontrolliert die Seite. Das ist der Test, der „Symbol wird zur App" von
+  „Symbol wird zum grauen Lesezeichen" trennt.
 
 ---
 

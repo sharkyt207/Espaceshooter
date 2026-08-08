@@ -15,7 +15,8 @@
     "test": "node --import ./tests/register.mjs --test tests/*.test.ts",
     "icons": "node scripts/build-icons.mjs",
     "verify": "npm run typecheck && npm run test && npm run build",
-    "offline": "node tests/offline.mjs"
+    "offline": "node tests/offline.mjs",
+    "pwa": "node tests/pwa.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
