@@ -1,4 +1,4 @@
-import { cssVar, el } from '../Dom';
+import { clear, cssVar, el } from '../Dom';
 import { screenShell, type Screen } from '../ScreenManager';
 import type { RaidSession } from '../../raid/RaidSession';
 import { TILE_DEFS } from '../../world/TileMap';
@@ -39,13 +39,62 @@ export class MapScreen implements Screen {
     if (!ctx) throw new Error('2D context unavailable for the map');
     this.ctx = ctx;
 
+    // A key beside the map, in the space a square map leaves in a landscape
+    // panel.
+    //
+    // Locations carry up to sixteen named districts now, and at phone scale a
+    // 160-tile map gives about two pixels per tile - a twenty-tile building is
+    // under forty pixels wide, which does not hold "Sanitätsstation" at any
+    // legible size. Measuring the text (see `draw`) stopped labels colliding,
+    // but it stopped them by drawing almost none of them, and districts the
+    // player cannot read are districts that may as well not be named.
+    //
+    // Numbering on the map and naming in a list fixes both: every district is
+    // readable, the numbers stay legible at two pixels a tile, and the list
+    // fills horizontal space that a square map was wasting anyway.
+    this.legendEl = el('div', { class: 'map-legend' });
+
     shell.body.appendChild(
       el('div', { class: 'panel', style: { flex: '1' } }, [
-        el('div', { class: 'panel-body', style: { display: 'flex', alignItems: 'center', justifyContent: 'center' } }, [
+        el('div', {
+          class: 'panel-body',
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px' },
+        }, [
           this.canvas,
+          this.legendEl,
         ]),
       ]),
     );
+  }
+
+  private readonly legendEl: HTMLElement;
+
+  /**
+   * The key beside the map: only the districts too small to label in place.
+   *
+   * Deliberately not a list of everything. A district whose name is already
+   * drawn on the map does not need a second entry, and a key that repeats what
+   * is already legible makes the player check twice.
+   */
+  private renderLegend(entries: { index: number; name: string; danger: number }[]): void {
+    clear(this.legendEl);
+    this.legendEl.style.display = entries.length > 0 ? 'flex' : 'none';
+    if (entries.length === 0) return;
+
+    for (const entry of entries) {
+      const tone = entry.danger > 0.6
+        ? 'var(--bad)'
+        : entry.danger > 0.35 ? 'var(--warn)' : 'var(--text-faint)';
+      this.legendEl.appendChild(
+        el('div', { class: 'map-legend-row' }, [
+          el('span', { class: 'n', text: String(entry.index) }),
+          el('span', { class: 'label' }, [
+            el('div', { class: 'name', text: entry.name }),
+            el('div', { class: 'risk', style: { color: tone }, text: dangerLabel(entry.danger) }),
+          ]),
+        ]),
+      );
+    }
   }
 
   bind(session: RaidSession): void {
@@ -155,7 +204,13 @@ export class MapScreen implements Screen {
     // briefed operation - you would know a sector's reputation before going in
     // - and it is the *contents* that exploration reveals, not the reputation.
     // Hiding the rating would not create tension, only ignorance.
+    // Numbering runs over the interior districts only; the outer ring is the
+    // ground everything sits on, not a place you navigate to.
+    let index = 0;
+    const legend: { index: number; name: string; danger: number }[] = [];
+
     for (const zone of map.zones) {
+      if (zone.interior) index++;
       const x = zone.x0 * scale;
       const y = zone.y0 * scale;
       const zw = (zone.x1 - zone.x0 + 1) * scale;
@@ -170,18 +225,54 @@ export class MapScreen implements Screen {
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, y + 0.5, zw - 1, zh - 1);
 
-      // Name and rating, but only where the zone is big enough to carry them.
-      // A label spilling past its own zone points at the wrong place, which is
-      // worse than no label.
-      if (zw > scale * 12 && zh > scale * 6) {
-        const font = Math.max(8, Math.min(13, scale * 2));
-        ctx.font = `${font}px sans-serif`;
+      // Name and rating, drawn only where they actually fit inside the zone.
+      //
+      // The test used to be on the zone's size in tiles - at least 12 by 6 -
+      // which is not the same question. Once locations grew to sixteen named
+      // districts on a 160-tile map, plenty of zones cleared that bar while
+      // being far too small for two lines of type, so labels spilled past
+      // their own rectangles and collided with their neighbours'. A label
+      // sitting over the wrong district is worse than no label.
+      //
+      // Measuring the glyphs answers the real question, and it also solves the
+      // collisions for free: text that stays inside its own rectangle can only
+      // overlap as much as the rectangles do, which is not at all.
+      const font = Math.max(8, Math.min(13, scale * 2.2));
+      ctx.font = `${font}px sans-serif`;
+      const pad = 3;
+      const nameWidth = ctx.measureText(zone.name).width;
+
+      if (!zone.interior) {
+        // The outer ring is the ground everything else sits on. Its label
+        // always fits - it is the whole map - so it was being drawn across
+        // whichever district happened to occupy the top-left corner, and the
+        // header already says which zone the player is standing in.
+      } else if (nameWidth + pad * 2 <= zw && font + pad * 2 <= zh) {
+        // Room for the real thing.
         ctx.fillStyle = cssVar('--text-dim');
-        ctx.fillText(zone.name, x + 4, y + font + 2);
-        ctx.fillStyle = heat > 0.6 ? cssVar('--bad') : heat > 0.35 ? cssVar('--warn') : cssVar('--text-faint');
-        ctx.fillText(dangerLabel(zone.danger), x + 4, y + font * 2 + 4);
+        ctx.fillText(zone.name, x + pad, y + font + pad);
+
+        const rating = dangerLabel(zone.danger);
+        if (font * 2 + pad * 3 <= zh && ctx.measureText(rating).width + pad * 2 <= zw) {
+          ctx.fillStyle = heat > 0.6
+            ? cssVar('--bad')
+            : heat > 0.35 ? cssVar('--warn') : cssVar('--text-faint');
+          ctx.fillText(rating, x + pad, y + font * 2 + pad * 2);
+        }
+      } else if (zone.interior) {
+        // Too small for the name: number it and let the key carry the rest.
+        // A digit stays legible far below the width a word needs.
+        const marker = String(index);
+        const mw = ctx.measureText(marker).width;
+        if (mw + 2 <= zw && font <= zh) {
+          ctx.fillStyle = cssVar('--text');
+          ctx.fillText(marker, x + (zw - mw) / 2, y + (zh + font * 0.7) / 2);
+        }
+        legend.push({ index, name: zone.name, danger: zone.danger });
       }
     }
+
+    this.renderLegend(legend);
 
     // --- extraction markers -------------------------------------------------
     for (const ex of session.extraction.extracts) {
@@ -243,6 +334,7 @@ function countExplored(explored: Uint8Array): number {
   for (let i = 0; i < explored.length; i++) n += explored[i];
   return n;
 }
+
 
 /**
  * A zone's danger as words rather than a number.

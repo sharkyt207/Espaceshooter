@@ -2,6 +2,7 @@ import { Rng } from '../core/Random';
 import { Tile, TileMap } from './TileMap';
 import { hasLineOfSight } from './Raycast';
 import { applyConditions, defaultConditions } from './Conditions';
+import { TIER_DANGER, districtById, type DistrictKind } from './Districts';
 
 /**
  * MapGenerator - seeded procedural construction of raid locations.
@@ -139,6 +140,21 @@ export interface MapBlueprint {
   /** AI population target for the location. */
   aiCount: number;
   /**
+   * Which kinds of building this location is made of, most characteristic
+   * first, and which one anchors it.
+   *
+   * Buildings used to be anonymous rectangles differing only in size, so a
+   * workshop and an office held the same things and there was no reason to
+   * prefer either. A district mix is what turns "a building" into "the
+   * medical store", which is the difference between a map you navigate and a
+   * map you *know*.
+   *
+   * `anchor` is the map's centrepiece: placed first, given the best ground,
+   * and always its most dangerous and most valuable address.
+   */
+  anchor: string;
+  districts: string[];
+  /**
    * One line telling the player what kind of place this is.
    *
    * The locations carry real, measured differences - sightlines from 4.7 to
@@ -217,19 +233,30 @@ export function generateMap(bp: MapBlueprint, seed: number): GeneratedMap {
 
   // 3. Buildings. Largest first so the anchor structures get the good ground.
   const buildings: Rect[] = [];
+  /** Which district each placed building belongs to, by the same index. */
+  const buildingKinds: DistrictKind[] = [];
   // Footprints scale with the blueprint. Floored at a size that still fits a
   // partitioned interior with a doorway - below about seven tiles the BSP
   // split produces rooms nobody can walk into.
   const scaled = (n: number) => Math.max(7, Math.round(n * bp.structureScale));
+
   for (let i = 0; i < bp.buildings; i++) {
     const big = i === 0;
-    const w = scaled(big ? rng.int(18, 24) : rng.int(9, 16));
-    const h = scaled(big ? rng.int(14, 20) : rng.int(8, 14));
+    // The anchor first, then the mix cycled so every district in the list
+    // appears before any repeats - a location with four kinds listed gets all
+    // four rather than four rolls of the same die.
+    const kind = big
+      ? districtById(bp.anchor)
+      : districtById(bp.districts[(i - 1) % Math.max(1, bp.districts.length)]);
+
+    const w = scaled(rng.int(kind.size.min, kind.size.max));
+    const h = scaled(rng.int(Math.round(kind.size.min * 0.8), Math.round(kind.size.max * 0.85)));
     const placed = tryPlace(rng, occupied, 3, 3, bp.width - 4, usableY1, w, h, 4);
     if (!placed) continue;
     occupied.push(placed);
     buildings.push(placed);
-    carveBuilding(map, rng, placed, big, result);
+    buildingKinds.push(kind);
+    carveBuilding(map, rng, placed, big, result, kind);
   }
 
   // 4. Container yards - dense, low-visibility cover mazes between buildings.
@@ -247,11 +274,13 @@ export function generateMap(bp: MapBlueprint, seed: number): GeneratedMap {
   // 5. Perimeter fencing subdividing the open yard, with gates so it stays open.
   carveFenceLines(map, rng, bp, occupied);
 
-  // 6. Loose clutter for micro-cover in the open ground.
+  // 6. Cover. Deliberate first - long open runs get something to move between
+  // - then loose clutter fills the rest at the blueprint's density.
+  placeCoverOnOpenLanes(map, rng, bp, occupied);
   scatterClutter(map, rng, bp, occupied);
 
   // 7. Zones - drives loot rarity, AI density and ambience.
-  buildZones(map, buildings, bp);
+  buildZones(map, buildings, buildingKinds, bp);
 
   // 8. Extractions on opposing edges, at least one conditional.
   buildExtracts(map, rng, bp, result);
@@ -270,7 +299,7 @@ export function generateMap(bp: MapBlueprint, seed: number): GeneratedMap {
   buildPatrolRoutes(map, rng, result);
 
   // 11. Loot anchors weighted towards interiors and the boss lair.
-  placeLootAnchors(map, rng, bp, result, buildings, regions);
+  placeLootAnchors(map, rng, bp, result, buildings, buildingKinds, regions);
 
   // 12. Boss lair in the largest building, if the blueprint has one.
   if (bp.hasBoss && buildings.length > 0) {
@@ -324,9 +353,18 @@ function tryPlace(
  * Carve an enclosed building: outer shell, BSP-partitioned rooms, doorways,
  * window bands and an interior ceiling so lighting knows it is indoors.
  */
-function carveBuilding(map: TileMap, rng: Rng, r: Rect, isLarge: boolean, out: GeneratedMap): void {
-  const wallMat = isLarge ? Tile.Concrete : rng.pick([Tile.Brick, Tile.Metal, Tile.Concrete]);
-  const floorMat = isLarge ? Tile.Concrete : rng.pick([Tile.Concrete, Tile.Wood]);
+function carveBuilding(
+  map: TileMap,
+  rng: Rng,
+  r: Rect,
+  isLarge: boolean,
+  out: GeneratedMap,
+  district: DistrictKind,
+): void {
+  // Materials come from the district now, so a boiler house does not read as
+  // an office block with different loot in it.
+  const wallMat = district.wall;
+  const floorMat = district.wall === Tile.Brick ? Tile.Wood : Tile.Concrete;
 
   map.fillRect(r.x0, r.y0, r.x1, r.y1, Tile.Floor);
   map.fillFloorRect(r.x0, r.y0, r.x1, r.y1, floorMat);
@@ -336,25 +374,48 @@ function carveBuilding(map: TileMap, rng: Rng, r: Rect, isLarge: boolean, out: G
   // Interior partitioning. Large buildings get a warehouse hall + side rooms;
   // small ones get a simple two-or-three room split.
   const rooms: Rect[] = [];
-  bspSplit(rng, { x0: r.x0 + 1, y0: r.y0 + 1, x1: r.x1 - 1, y1: r.y1 - 1 }, isLarge ? 6 : 4, rooms);
+  // Interior grain is the district's, not the building's size. A warehouse
+  // stays one hall however big it is; an office is a warren however small.
+  bspSplit(
+    rng,
+    { x0: r.x0 + 1, y0: r.y0 + 1, x1: r.x1 - 1, y1: r.y1 - 1 },
+    district.subdivision + (isLarge ? 1 : 0),
+    rooms,
+  );
 
-  const partitionMat = isLarge ? Tile.Brick : Tile.Wood;
+  const partitionMat = district.partition;
   for (const room of rooms) {
     // Draw partition walls only on edges that are not the building shell.
     if (room.x0 > r.x0 + 1) for (let y = room.y0; y <= room.y1; y++) map.set(room.x0 - 1, y, partitionMat);
     if (room.y0 > r.y0 + 1) for (let x = room.x0; x <= room.x1; x++) map.set(x, room.y0 - 1, partitionMat);
   }
 
-  // Doorways: punch two-tile gaps so rooms are never sealed.
+  // Doorways: two-tile gaps so rooms are never sealed, and roughly half of
+  // them carry an actual door.
+  //
+  // `Tile.DoorClosed` has existed in the tile set from the beginning - with
+  // its own material, its own penetration value and a movement cost of 1.6 -
+  // and the generator placed exactly zero of them on every map. Interiors were
+  // rooms connected by holes.
+  //
+  // A door is worth having for three separate reasons: it costs time to pass,
+  // so a route through a building is not free; it is thin cover that stops a
+  // pistol round and not a rifle one; and it reads, so a player can tell a
+  // doorway from a blown-out wall and knows which one an enemy is likely to
+  // come through. The other half stay open, because a building where every
+  // room costs a door to enter is tedious rather than tense.
+  const doorway = (x: number, y: number): void => {
+    map.set(x, y, rng.chance(0.5) ? Tile.DoorClosed : Tile.Floor);
+  };
   for (const room of rooms) {
     if (room.x0 > r.x0 + 1) {
       const dy = rng.int(room.y0, Math.max(room.y0, room.y1 - 1));
-      map.set(room.x0 - 1, dy, Tile.Floor);
+      doorway(room.x0 - 1, dy);
       map.set(room.x0 - 1, dy + 1, Tile.Floor);
     }
     if (room.y0 > r.y0 + 1) {
       const dx = rng.int(room.x0, Math.max(room.x0, room.x1 - 1));
-      map.set(dx, room.y0 - 1, Tile.Floor);
+      doorway(dx, room.y0 - 1);
       map.set(dx + 1, room.y0 - 1, Tile.Floor);
     }
   }
@@ -418,15 +479,27 @@ function bspSplit(rng: Rng, r: Rect, depth: number, out: Rect[]): void {
 }
 
 /** face: 0=north 1=east 2=south 3=west */
+/**
+ * Cut an entrance in one face of a building.
+ *
+ * The opening is left clear except for one edge tile, which becomes a door.
+ * That keeps every entrance passable at a run while still giving it a visible
+ * threshold - a doorway a player can recognise from outside and choose,
+ * rather than an anonymous gap in a wall.
+ */
 function punchEntrance(map: TileMap, rng: Rng, r: Rect, face: number, width: number): void {
+  const doorAt = rng.int(0, width - 1);
+  const tileFor = (i: number): Tile =>
+    i === doorAt && width > 1 ? Tile.DoorClosed : Tile.Floor;
+
   if (face === 0 || face === 2) {
     const y = face === 0 ? r.y0 : r.y1;
     const x = rng.int(r.x0 + 2, Math.max(r.x0 + 2, r.x1 - width - 1));
-    for (let i = 0; i < width; i++) map.set(x + i, y, Tile.Floor);
+    for (let i = 0; i < width; i++) map.set(x + i, y, tileFor(i));
   } else {
     const x = face === 1 ? r.x1 : r.x0;
     const y = rng.int(r.y0 + 2, Math.max(r.y0 + 2, r.y1 - width - 1));
-    for (let i = 0; i < width; i++) map.set(x, y + i, Tile.Floor);
+    for (let i = 0; i < width; i++) map.set(x, y + i, tileFor(i));
   }
 }
 
@@ -515,6 +588,130 @@ function isInsideAny(x: number, y: number, rects: Rect[], padding: number): bool
   return false;
 }
 
+/**
+ * Break up the longest open sightlines with deliberate cover.
+ *
+ * `scatterClutter` below spreads cover evenly, which fills a map without
+ * deciding anything: the places that most need something to hide behind are
+ * exactly the long open runs, and an even scatter under-serves them by
+ * construction. A player crossing eighty tiles of bare concrete has the same
+ * choice at every step, which is no choice.
+ *
+ * So this runs first and works the other way round. It walks a coarse grid of
+ * horizontal and vertical lanes, measures how far each one runs unobstructed,
+ * and for any lane longer than the threshold drops staggered cover into it at
+ * intervals - offset from the lane's centre so the result is something to move
+ * *between* rather than a wall across it.
+ *
+ * The material is chosen for what it does rather than for looks:
+ *
+ *   - **Container** (2.6 m, opaque): breaks the sightline outright. The anchor
+ *     of a crossing.
+ *   - **Crate** (1.2 m, *not* opaque): crouch cover you can shoot over, which
+ *     is the piece that makes a crossing a fight rather than a sprint.
+ *   - **Rubble** (0.5 m, walkable, 1.9x movement cost): no protection, but it
+ *     slows and it is noisy - a route that costs something.
+ *
+ * Long lanes stay long: this thins them into a series of decisions instead of
+ * removing them, because a location whose identity is open ground has to keep
+ * its open ground.
+ */
+function placeCoverOnOpenLanes(
+  map: TileMap,
+  rng: Rng,
+  bp: MapBlueprint,
+  occupied: Rect[],
+): void {
+  /**
+   * Where "a long sightline" becomes "a shooting gallery" - and it is not the
+   * same number on every map.
+   *
+   * A fixed threshold with dense placement flattened everything: the harbour's
+   * mean outdoor sightline fell from 10.7 to 5.6 tiles, which is barely above
+   * the boiler house and destroys the one location built around long shots.
+   * Breaking up open ground and *having* open ground are the same lever pulled
+   * in opposite directions, so the threshold has to follow the blueprint's own
+   * intent rather than override it.
+   *
+   * `clutter` already states that intent - it is how broken up the location is
+   * meant to be - so the threshold reads it. An open dock (0.3) tolerates runs
+   * up to about 36 tiles; a packed plant (3.2) breaks them at 21.
+   */
+  const LONG = Math.round(Math.max(18, Math.min(36, 38 - bp.clutter * 6)));
+  // Every second lane. Cover is dropped with a one-tile offset, so a piece
+  // placed while scanning lane y also serves y-1 and y+1 - at step 2 every
+  // lane on the map is within reach of one, with none scanned twice.
+  //
+  // Step 3 left gaps, and the gaps were the whole problem: the harbour kept a
+  // 156-tile run straight across the map, which is precisely the shooting
+  // gallery this function exists to prevent.
+  const LANE_STEP = 2;
+
+  const openAt = (x: number, y: number): boolean =>
+    map.inBounds(x, y) && map.at(x, y) === Tile.Floor && !isInsideAny(x, y, occupied, 0);
+
+  /**
+   * Drop one piece of cover, spanning the scanned lane and its neighbour.
+   *
+   * The span is what makes the coverage guarantee work. A single tile only
+   * breaks the lane it sits in, so with a random offset the lanes between
+   * scans were served only by luck - and the harbour kept a full-width run
+   * because of it. Two tiles across, at step 2, means every lane on the map is
+   * broken by something.
+   */
+  const drop = (x: number, y: number, horizontal: boolean): void => {
+    // Perpendicular to the lane, so the piece spans two lanes rather than
+    // lying along one.
+    const bx = horizontal ? x : x + 1;
+    const by = horizontal ? y + 1 : y;
+    if (!openAt(x, y)) return;
+
+    const roll = rng.float();
+    const material = roll < 0.34 ? Tile.Container : roll < 0.78 ? Tile.Crate : Tile.Rubble;
+    map.set(x, y, material);
+    if (openAt(bx, by)) map.set(bx, by, material);
+  };
+
+  /** Walk one lane, and break every long open run inside it. */
+  const scanLane = (
+    length: number,
+    at: (i: number) => { x: number; y: number },
+    horizontal: boolean,
+  ): void => {
+    let runStart = -1;
+    for (let i = 0; i <= length; i++) {
+      const p = i < length ? at(i) : null;
+      const open = p ? openAt(p.x, p.y) : false;
+
+      if (open && runStart < 0) runStart = i;
+      if (!open && runStart >= 0) {
+        const runLength = i - runStart;
+        if (runLength > LONG) {
+          // One piece every eight to twelve tiles: enough to break the run,
+          // sparse enough that the ground still reads as open.
+          // Spaced at roughly the threshold itself: enough to cap the run
+          // near LONG, sparse enough that the ground still reads as open.
+          for (let k = runStart + Math.floor(LONG * 0.55); k < i - 4; k += LONG) {
+            const q = at(k);
+            drop(q.x, q.y, horizontal);
+          }
+        }
+        runStart = -1;
+      }
+    }
+  };
+
+  // From 2, not 4. The double perimeter wall sits at 0 and 1, so rows 2 and 3
+  // are open ground - and starting at 4 left a ring road running the entire
+  // way around the map with nothing in it. That was the 156-tile run.
+  for (let y = 2; y < bp.height - 2; y += LANE_STEP) {
+    scanLane(bp.width, (i) => ({ x: i, y }), true);
+  }
+  for (let x = 2; x < bp.width - 2; x += LANE_STEP) {
+    scanLane(bp.height, (i) => ({ x, y: i }), false);
+  }
+}
+
 function scatterClutter(map: TileMap, rng: Rng, bp: MapBlueprint, occupied: Rect[]): void {
   const attempts = Math.floor(bp.width * bp.height * 0.02 * bp.clutter * 4);
   for (let i = 0; i < attempts; i++) {
@@ -536,33 +733,40 @@ function scatterClutter(map: TileMap, rng: Rng, bp: MapBlueprint, occupied: Rect
   }
 }
 
-function buildZones(map: TileMap, buildings: Rect[], bp: MapBlueprint): void {
+function buildZones(
+  map: TileMap,
+  buildings: Rect[],
+  kinds: DistrictKind[],
+  bp: MapBlueprint,
+): void {
   // Outer ring: low danger, low value - the "get your bearings" band.
   map.addZone({
     name: 'Außengelände',
     x0: 1, y0: 1, x1: bp.width - 2, y1: bp.height - 2,
     danger: 0.25, interior: false,
   });
-  const names = ['Lagerhalle', 'Verwaltung', 'Werkhalle', 'Umschlagpunkt', 'Kesselhaus'];
-  // The first (largest) building is the map's high-value contested space, and
-  // the rest ramp up towards it without ever passing it.
+
+  // Districts name themselves and rank by tier. This replaced a positional
+  // ramp - `0.5 + i * 0.05`, unbounded, so on a dense location the last
+  // building placed outranked the anchor and the map's risk gradient
+  // inverted. Danger is now a property of what a place *is*, which is both
+  // correct and stable at any building count.
   //
-  // This used to read `0.5 + i * 0.05`, which is unbounded: the ninth building
-  // scored 0.90 and the fourteenth 1.15, so on a dense location the *last*
-  // structure placed outranked the anchor. Nothing caught it while no
-  // blueprint asked for more than five buildings. Adding one that asks for
-  // fourteen inverted the map's risk gradient - hostiles thinned out on the
-  // valuable ground instead of crowding it - which is the one relationship the
-  // whole loop is built on, so it failed the risk/reward test rather than
-  // shipping quietly.
-  //
-  // Expressed as a fraction of the count now, so it holds at any density.
-  const secondaryCount = Math.max(1, buildings.length - 1);
+  // Repeated kinds get numbered, because "Lagerhalle" three times over is not
+  // a landmark a player can navigate by.
+  const seen = new Map<string, number>();
   buildings.forEach((b, i) => {
+    const kind = kinds[i] ?? districtById(bp.anchor);
+    const n = (seen.get(kind.id) ?? 0) + 1;
+    seen.set(kind.id, n);
+    const repeats = kinds.filter((k) => k.id === kind.id).length;
+
     map.addZone({
-      name: names[i % names.length],
+      name: repeats > 1 ? `${kind.label} ${n}` : kind.label,
       x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1,
-      danger: i === 0 ? 0.9 : 0.35 + (i / secondaryCount) * 0.35,
+      // The anchor is always the map's most contested address, whatever it is
+      // made of; everything else takes its tier's value.
+      danger: i === 0 ? 0.9 : TIER_DANGER[kind.tier],
       interior: true,
     });
   });
@@ -948,22 +1152,35 @@ function placeLootAnchors(
   bp: MapBlueprint,
   out: GeneratedMap,
   buildings: Rect[],
+  kinds: DistrictKind[],
   regions: RegionMap,
 ): void {
-  // Interior anchors: the reward for entering contested indoor space.
+  // Interior anchors: the reward for entering contested indoor space, and now
+  // the reason to prefer one interior over another.
+  //
+  // Every building used to draw from the same weighted list of five container
+  // types, split only into "the first building" and "all the others". A
+  // workshop and a medical store therefore held the same things, which makes
+  // "which building do I go to" a question with no answer and reduces a map to
+  // its geometry. Contents come from the district now: the Werkstatt has tool
+  // chests in it, the Sanitätsstation has medicine, the Waffenkammer has
+  // weapons. That is what makes a location learnable.
   for (let bi = 0; bi < buildings.length; bi++) {
     const b = buildings[bi];
+    const kind = kinds[bi] ?? districtById(bp.anchor);
+    const ids = kind.containers.map((c) => c.id);
+    const weights = kind.containers.map((c) => c.weight);
     const count = Math.floor((rectW(b) * rectH(b)) / 26) + 2;
+
     for (let i = 0; i < count; i++) {
       const spot = findFreeTile(map, rng, b.x0 + 1, b.y0 + 1, b.x1 - 1, b.y1 - 1, regions);
       if (!spot) continue;
-      const primary = bi === 0;
-      const containerId = rng.weighted(
-        primary
-          ? ['weapon_crate', 'med_cabinet', 'tool_chest', 'safe', 'supply_crate']
-          : ['supply_crate', 'med_cabinet', 'tool_chest', 'filing_cabinet', 'weapon_crate'],
-        primary ? [3, 2, 2, 2, 3] : [4, 2, 2, 3, 1],
-      )!;
+      // The anchor building gets one guaranteed high-value container on top of
+      // its district's mix, so the map's centrepiece is worth the walk
+      // whatever it happens to be made of.
+      const containerId = bi === 0 && i === 0
+        ? 'safe'
+        : rng.weighted(ids, weights)!;
       out.lootAnchors.push({ x: spot.x + 0.5, y: spot.y + 0.5, tableId: containerId, containerId });
     }
   }

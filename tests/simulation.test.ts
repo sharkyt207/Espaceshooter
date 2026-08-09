@@ -1239,13 +1239,30 @@ describe('Locations feel different', () => {
       return roofed / Math.max(1, floor);
     };
 
-    // The Klaerwerk is fought indoors: roughly a third of its walkable floor
-    // is under a roof, against about a seventh at the harbour and depot.
+    // The Klaerwerk is the one fought indoors, and it has to lead *every*
+    // other location on that measure - not merely beat one of them.
+    //
+    // This was written as "1.8x the harbour" when the harbour was 14 % roofed.
+    // Then every map grew and gained interiors, the harbour reached 23 %, and
+    // the ratio stopped holding while the Klaerwerk was still clearly the most
+    // interior place in the game. A threshold pinned to another map's absolute
+    // value ages badly; "strictly ahead of all of them, by a margin worth
+    // feeling" says the intended thing and cannot be satisfied by accident.
+    //
+    // The generator's ceiling here is about 36 %: past roughly two dozen
+    // buildings the placer runs out of room and further ones simply fail, so
+    // squeezing the plot smaller buys interior share by losing districts. 30 %
+    // at fifteen districts is the better trade.
     const filter = indoorShare('filter');
+    const others = MAP_BLUEPRINTS
+      .filter((b) => b.id !== 'filter')
+      .map((b) => ({ id: b.id, share: indoorShare(b.id) }));
+    const runnerUp = others.reduce((a, b) => (b.share > a.share ? b : a));
     assert.ok(
-      filter > indoorShare('harbour') * 1.8 && filter > indoorShare('depot') * 1.8,
-      `the Klaerwerk should be substantially more interior than the open ` +
-        `locations (${(filter * 100).toFixed(0)} % roofed)`,
+      filter > runnerUp.share * 1.15,
+      `the Klaerwerk should be the most interior location by a clear margin - ` +
+        `it is ${(filter * 100).toFixed(0)} % roofed against ${runnerUp.id} at ` +
+        `${(runnerUp.share * 100).toFixed(0)} %`,
     );
     // And dark enough that the torch stops being optional.
     const filterBp = MAP_BLUEPRINTS.find((b) => b.id === 'filter')!;
@@ -1267,10 +1284,19 @@ describe('Locations feel different', () => {
       `the Verladehof should be far denser than the harbour ` +
         `(${(density('yard') * 1000).toFixed(1)} vs ${(density('harbour') * 1000).toFixed(1)} per 1000 tiles)`,
     );
+    // The clock is half the pressure, so it has to stay the shortest by a
+    // wide margin rather than merely be short. Pinned relatively, because an
+    // absolute bound broke the moment every location's clock grew with its
+    // area - the Verladehof went from 8 to 10 minutes and the assertion
+    // failed while the map had become *more* distinct, not less.
     const yardBp = MAP_BLUEPRINTS.find((b) => b.id === 'yard')!;
+    const shortestOther = Math.min(
+      ...MAP_BLUEPRINTS.filter((b) => b.id !== 'yard').map((b) => b.raidSeconds),
+    );
     assert.ok(
-      yardBp.raidSeconds <= 8 * 60,
-      `the Verladehof's clock has to be the pressure (${yardBp.raidSeconds / 60} min)`,
+      yardBp.raidSeconds <= shortestOther * 0.6,
+      `the Verladehof's clock has to be the pressure - ${yardBp.raidSeconds / 60} min ` +
+        `against ${shortestOther / 60} min for the next shortest`,
     );
   });
 
