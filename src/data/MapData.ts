@@ -36,19 +36,26 @@ import type { MapBlueprint } from '../world/MapGenerator';
  *
  * Each location has to own an axis, or it is a reskin. As built:
  *
- *              Sichtlinie   Innen    Strasse   Gebaeude   KI
- *   harbour       16.5       16 %     22 %        16      34
- *   depot         14.5       16 %     23 %        13      28
- *   works          9.0       18 %     18 %        15      24
- *   filter        12.2       23 %     12 %        28      26
- *   yard          11.8       13 %     19 %         8      26
+ *              Sichtlinie   Innen   Strasse   laengste   Bezirke
+ *                                              Gerade
+ *   harbour        20.4      13 %     18 %       33         10
+ *   depot          16.9      12 %     24 %       37          7
+ *   works          10.2      17 %     17 %       20         11
+ *   filter         11.4      24 %      9 %       18         14
+ *   yard           12.2      13 %     25 %       22          4
  *
- * Sightline is the mean outdoor view in tiles; interior is the roofed share of
- * walkable ground. The harbour is the open one and the works the tight one, at
- * nearly two to one; the Klaerwerk owns the interior axis outright, which is
- * why it carries the darkness as well. Road share is a character lever in its
- * own right: a haulage dock is organised around lorries, a process compound is
- * walked.
+ * Sightline is the mean outdoor view in tiles; interior and road are shares of
+ * walkable ground; "laengste Gerade" is the longest dead-straight run of road
+ * surface, which is the number that decides whether a road reads as a route or
+ * as a firing lane.
+ *
+ * The harbour is the open one and the works the tight one, at nearly two to
+ * one; the Klaerwerk owns the interior axis outright, which is why it carries
+ * the darkness as well. Road share is a character lever in its own right: a
+ * haulage dock is organised around lorries, a process compound is walked.
+ *
+ * Districts is what the placer actually fits, not what the blueprint asks for.
+ * The gap is area: these plots are full.
  *
  * All locations are original to this project.
  */
@@ -61,6 +68,12 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // where a scope is worth its weight.
     width: 160,
     height: 160,
+    // 16 attempts, of which the placer fits about 12. Raising it to 20 was
+    // tried and moved the delivered count by one: with nine container yards
+    // and a quarter of the walkable ground given to roads, this plot is full,
+    // and the shortfall is area rather than attempts. Left at the honest
+    // number instead of shipping a knob that does nothing, which is a failure
+    // this file has produced before.
     buildings: 16,
     containerYards: 9,
     // A working dock: a lot of bare concrete between the sheds. Sightlines run
@@ -113,7 +126,12 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // the interior axis that belongs to the Klaerwerk. Still the densest
     // structure count per tile of any mid-sized location.
     buildings: 15,
-    containerYards: 8,
+    // Five, not eight. A boiler house is not a container terminal - its own
+    // briefing talks about debris in the alleys, not stacked freight - and
+    // eight yards of it was quietly taking the interior axis off the
+    // Klaerwerk, because container tiles are neither floor nor roof and so
+    // shrink the very denominator that axis is measured against.
+    containerYards: 5,
     // A plant packed into its plot: many structures, heavy debris between
     // them, corners everywhere. Short weapons and sound discipline win here.
     //
@@ -147,9 +165,13 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // Many structures on a compact plot: the location is fought *through*
     // buildings rather than across a yard, which is the highest interior share
     // the generator reaches.
-    buildings: 28,
+    buildings: 32,
     containerYards: 3,
-    clutter: 0.8,
+    // Raised from 0.8. A sewage works is filter beds, settling tanks and pipe
+    // runs - the outdoor ground between its buildings is the most obstructed
+    // in the sector, not the least - and the low value was leaving it with so
+    // much open yard that the boiler house was beating it on interior share.
+    clutter: 1.6,
     // Small structures, and a lot of them. Raised to 1.1 at one point, which
     // over-subscribed the plot: twenty-two buildings at that size could not be
     // fitted once roads were carving it, only seven or eight actually placed,

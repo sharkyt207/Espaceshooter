@@ -154,6 +154,10 @@ export function carveRoads(
   count: number,
 ): RoadPlan {
   const plan: RoadPlan = { corridors: [], spine: [] };
+  // A location with no roads is a legitimate blueprint - a compound reached on
+  // foot - and without this the branch loop indexes an empty array of
+  // primaries and takes the whole generator down with it.
+  if (count <= 0) return plan;
   const seed = rng.int(1, 1 << 28);
   const w = bounds.x1 - bounds.x0;
   const h = bounds.y1 - bounds.y0;
@@ -168,15 +172,40 @@ export function carveRoads(
     const lane = (horizontal ? bounds.y0 : bounds.x0) + across * rng.range(0.18, 0.82);
 
     const control: Pt[] = [];
-    const steps = 5;
+    // Eleven segments rather than five. Five control points can only really
+    // bend once, and one bend across a hundred and sixty tiles is a straight
+    // road with a kink in it; and the correction below needs somewhere to
+    // live, because Chaikin damps anything shorter than its control spacing.
+    const steps = 11;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const along = (horizontal ? bounds.x0 : bounds.y0) + span * t;
       // Noise displaces the lane sideways; the envelope pins both ends so a
       // road still arrives at the edge it set out for.
-      const wobble = (fbm(t * 3, r * 5.7, 8, 2, seed + r * 313) - 0.5) * across * 0.42;
+      //
+      // The contrast stretch is not cosmetic. Value noise is an average of
+      // corner samples and piles up around the middle of its range, so `fbm -
+      // 0.5` yields about +/-0.15 rather than the +/-0.5 the amplitude below
+      // reads as - which made every road wander a third as far as intended.
+      // Measured before it was added: the depot carried a 72-tile dead
+      // straight road across a 132-tile map, a 144-metre firing lane, on a
+      // location whose entire character is that no range is extreme. The same
+      // mistake, made independently, flattened the border bands.
+      const raw = fbm(t * 3, r * 5.7, 8, 2, seed + r * 313);
+      const n = Math.max(0, Math.min(1, (raw - 0.5) * 2.6 + 0.5));
       const envelope = Math.sin(Math.PI * t);
-      const off = lane + wobble * envelope;
+
+      // A second, shorter-wavelength term. The long bend alone is not enough:
+      // a road two tiles either side of its centre only has to stay within two
+      // tiles of a given row to fill that row for its whole length, and a
+      // gentle curve does exactly that - the depot still carried a 53-tile
+      // straight run with the long bend fixed. This keeps the centre moving,
+      // at an amplitude small enough to read as a road following the ground
+      // rather than as a wiggle.
+      const detailRaw = fbm(t * 11, r * 3.1 + 40, 8, 2, seed + r * 751);
+      const detail = Math.max(0, Math.min(1, (detailRaw - 0.5) * 2.6 + 0.5));
+
+      const off = lane + ((n - 0.5) * 0.5 + (detail - 0.5) * 0.13) * across * envelope;
       control.push(horizontal ? { x: along, y: off } : { x: off, y: along });
     }
 

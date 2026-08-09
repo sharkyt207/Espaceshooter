@@ -2983,3 +2983,106 @@ describe('Buildings are not boxes', () => {
     );
   });
 });
+
+describe('Roads go somewhere, and not in a straight line', () => {
+  /**
+   * Roads carve the plots, so they are the first thing a player navigates by -
+   * and a dead-straight one is both a giveaway that a program drew the level
+   * and a firing lane the length of the map.
+   *
+   * The number that decides this is the longest unbroken run of road surface
+   * in any single row or column. It was measured at 72 tiles on a 132-tile
+   * depot: a 144-metre lane, on the one location whose whole character is that
+   * no range is extreme. The cause was the same mistake that had already
+   * flattened the border bands, made independently a second time - value noise
+   * piles up around the middle of its range, so the sideways displacement came
+   * out at a third of the amplitude the code reads as. Hence this test, which
+   * catches it whichever module it happens in next.
+   */
+
+  /**
+   * Surfaced ground under open sky.
+   *
+   * The roof test is not decoration. Building interiors are floored with
+   * concrete too, so without it this counts warehouse floors as road - which
+   * made the first version of these tests pass with the road network switched
+   * off entirely, and made a twenty-tile warehouse read as a twenty-tile
+   * straight road while I was tuning the curvature against it.
+   */
+  const roadSurface = (m: TileMap, x: number, y: number): boolean =>
+    !m.isSolid(x, y) &&
+    m.ceiling[y * m.width + x] === 0 &&
+    m.floor[y * m.width + x] === Tile.Concrete;
+
+  test('no road runs straight for a third of the map', () => {
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of [1, 4242, 7, 99]) {
+        const m = generateMap(bp, seed).map;
+        let longest = 0;
+        for (let y = 0; y < m.height; y++) {
+          let run = 0;
+          for (let x = 0; x < m.width; x++) {
+            run = roadSurface(m, x, y) ? run + 1 : 0;
+            if (run > longest) longest = run;
+          }
+        }
+        for (let x = 0; x < m.width; x++) {
+          let run = 0;
+          for (let y = 0; y < m.height; y++) {
+            run = roadSurface(m, x, y) ? run + 1 : 0;
+            if (run > longest) longest = run;
+          }
+        }
+        // Proportional, with an absolute floor. Both terms are needed: on a
+        // 132-tile depot the failure was a 72-tile lane, which is only alarming
+        // relative to the map, while on the 76-tile Verladehof a road crossing
+        // a third of the site is 58 metres and perfectly ordinary. Without the
+        // floor this asks the smallest location to be curvier than physics
+        // allows; without the proportion it lets the largest one carry a lane
+        // half its width.
+        const limit = Math.max(30, Math.round(m.width * 0.36));
+        assert.ok(
+          longest <= limit,
+          `${bp.id} seed ${seed}: a road runs ${longest} tiles dead straight on a ` +
+            `${m.width}-tile map (limit ${limit})`,
+        );
+      }
+    }
+  });
+
+  test('and there is something to navigate by, in proportion to the site', () => {
+    // The other half of the claim: a test that only bounds straightness is
+    // satisfied by having no roads at all, which is the cheapest way to pass
+    // it. Bounded against the blueprint's own road count rather than a single
+    // figure, because that count is a character lever - the Klaerwerk is a
+    // compound reached on foot and is supposed to be down at one access road,
+    // while the dock is organised around lorries.
+    for (const bp of MAP_BLUEPRINTS) {
+      const m = generateMap(bp, 4242).map;
+      let road = 0;
+      let walkable = 0;
+      for (let y = 0; y < m.height; y++) {
+        for (let x = 0; x < m.width; x++) {
+          if (m.isSolid(x, y)) continue;
+          walkable++;
+          if (roadSurface(m, x, y)) road++;
+        }
+      }
+      const share = road / Math.max(1, walkable);
+      // Every location has a route through it.
+      assert.ok(
+        share > 0.03,
+        `${bp.id}: only ${(share * 100).toFixed(1)} % of walkable ground is surfaced - ` +
+          'there is no route through here at all',
+      );
+      // The ones built around vehicles have a network, not a lane.
+      if (bp.roads >= 4) {
+        assert.ok(
+          share > 0.1,
+          `${bp.id} asks for ${bp.roads} roads but only ${(share * 100).toFixed(1)} % of its ` +
+            'walkable ground is surfaced - that is not a network',
+        );
+      }
+    }
+  });
+});
