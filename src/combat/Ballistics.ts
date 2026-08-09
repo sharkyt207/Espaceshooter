@@ -94,10 +94,45 @@ export interface ShotParams {
   velocityBonus: number;
 }
 
+/**
+ * Barriers recorded per integration step.
+ *
+ * Twelve is far more than any real segment crosses - a round that has already
+ * been through three barriers is dropped - but the walk is bounded anyway so
+ * a grazing shot down a wall face cannot overrun the buffer.
+ */
+const MAX_BARRIERS = 12;
+/** Near misses recorded per step; suppression does not need more than this. */
+const MAX_NEAR_MISSES = 8;
+/**
+ * How far above the head a round still counts as a near miss, in metres.
+ *
+ * A round cracking just overhead is the most suppressing thing there is, and
+ * one sailing five metres up is not even noticed. Without this the near-miss
+ * test was purely horizontal, so buckshot lofted over a three-metre wall
+ * suppressed the man standing behind it - which reads to the player as being
+ * shot at through concrete.
+ */
+const SUPPRESS_HEADROOM_M = 1.5;
+
 export class BallisticsSystem {
   private projectiles: Pool<Projectile>;
   private readonly rng: Rng;
   private nearby: number[] = [];
+
+  // --- per-step scratch, preallocated -------------------------------------
+  // The whole system's contract is that firing allocates nothing, and the
+  // ordered resolution below needs somewhere to put the events it finds.
+  private barrierT = new Float32Array(MAX_BARRIERS);
+  private barrierX = new Int32Array(MAX_BARRIERS);
+  private barrierY = new Int32Array(MAX_BARRIERS);
+  private barrierCount = 0;
+  private nearMissActor: Array<Combatant | null> = new Array(MAX_NEAR_MISSES).fill(null);
+  private nearMissT = new Float32Array(MAX_NEAR_MISSES);
+  private nearMissCloseness = new Float32Array(MAX_NEAR_MISSES);
+  private nearMissCount = 0;
+  private hitActor: Combatant | null = null;
+  private hitT = 0;
 
   constructor(
     private readonly bus: GameBus,
@@ -225,16 +260,45 @@ export class BallisticsSystem {
         continue;
       }
 
-      // --- actors along the segment ----------------------------------------
-      const hitActor = this.testActors(p, startX, startY, startZ, nx, ny, nz, segLenTiles, queryNearby, resolveActor);
-      if (hitActor) {
+      // --- resolve the step in distance order --------------------------------
+      //
+      // Actors and geometry have to be merged along the segment rather than
+      // tested one after the other, because a segment is not short. A rifle
+      // round covers roughly 360 tiles a second; at 60 Hz that is six tiles a
+      // step, at 30 Hz twelve. Testing every actor on the whole segment before
+      // looking at a single wall meant a round was credited with a hit on
+      // someone standing three tiles behind concrete whenever the wall and the
+      // target happened to fall in the same step - measured, and it depended
+      // on nothing but the phase of the integration, which is why being shot
+      // through cover felt random rather than explicable.
+      this.collectBarriers(map, startX, startY, startZ, nx, ny, nz, segLenTiles);
+      this.findActors(p, startX, startY, startZ, nx, ny, nz, segLenTiles, queryNearby, resolveActor);
+
+      // Anything the round physically reaches first is resolved first. The
+      // actor is the cut-off: barriers behind it never get to touch this shot.
+      const actorT = this.hitActor ? this.hitT : Infinity;
+      let stoppedAt = Infinity;
+      for (let b = 0; b < this.barrierCount; b++) {
+        if (this.barrierT[b] > actorT) break;
+        if (!this.resolveBarrier(p, map, b, startX, startY, startZ, nx, ny, nz)) {
+          stoppedAt = this.barrierT[b];
+          break;
+        }
+      }
+
+      // Suppression is only earned by rounds that actually got past the wall.
+      this.flushNearMisses(p, Math.min(stoppedAt, actorT));
+
+      if (stoppedAt < Infinity) {
         this.projectiles.releaseAt(i);
         continue;
       }
 
-      // --- geometry along the segment --------------------------------------
-      const stopped = this.testGeometry(p, map, startX, startY, startZ, nx, ny, nz, segLenTiles);
-      if (stopped) {
+      if (this.hitActor) {
+        const impactX = startX + (nx - startX) * this.hitT;
+        const impactY = startY + (ny - startY) * this.hitT;
+        const impactZ = startZ + (nz - startZ) * this.hitT;
+        this.resolveActorHit(p, this.hitActor, impactX, impactY, impactZ);
         this.projectiles.releaseAt(i);
         continue;
       }
@@ -245,8 +309,16 @@ export class BallisticsSystem {
     }
   }
 
-  /** Closest-approach test against every actor near the segment. */
-  private testActors(
+  /**
+   * Closest-approach test against every actor near the segment.
+   *
+   * Records rather than resolves: the caller merges what this finds with the
+   * barriers along the same segment and only then decides what the round
+   * actually did. Near misses are recorded with their position along the
+   * segment too, so a round stopped by a wall cannot suppress the person
+   * standing behind it.
+   */
+  private findActors(
     p: Projectile,
     x0: number,
     y0: number,
@@ -257,12 +329,19 @@ export class BallisticsSystem {
     segLen: number,
     queryNearby: (x: number, y: number, radius: number, out: number[]) => void,
     resolveActor: (id: number) => Combatant | undefined,
-  ): boolean {
+  ): void {
+    this.hitActor = null;
+    this.hitT = 0;
+    this.nearMissCount = 0;
+
     const midX = (x0 + x1) * 0.5;
     const midY = (y0 + y1) * 0.5;
     queryNearby(midX, midY, segLen * 0.5 + 1.2, this.nearby);
-    if (this.nearby.length === 0) return false;
+    if (this.nearby.length === 0) return;
 
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const lenSq = dx * dx + dy * dy;
     let bestT = Infinity;
     let bestActor: Combatant | null = null;
 
@@ -272,28 +351,30 @@ export class BallisticsSystem {
       const actor = resolveActor(id);
       if (!actor || !actor.alive) continue;
 
+      // Parametric position of closest approach, used to order events along
+      // the segment and to interpolate the impact height.
+      const t = lenSq > 0 ? clamp01(((actor.x - x0) * dx + (actor.y - y0) * dy) / lenSq) : 0;
       const distSq = pointSegmentDistSq(actor.x, actor.y, x0, y0, x1, y1);
       const r = actor.radius;
+
+      // Vertical position of the round as it passes, shared by both tests.
+      const impactZ = z0 + (z1 - z0) * t;
+
       if (distSq > r * r) {
         // Near miss: close enough to hear the round crack past. Feeds
         // suppression without needing a separate query.
         const suppressRadius = r + 1.4;
-        if (distSq <= suppressRadius * suppressRadius) {
-          const closeness = 1 - (Math.sqrt(distSq) - r) / 1.4;
-          actor.onNearMiss?.(p.ownerId, closeness, x0, y0);
+        const withinEarshot = impactZ > -0.5 && impactZ < actor.height + SUPPRESS_HEADROOM_M;
+        if (withinEarshot && distSq <= suppressRadius * suppressRadius && this.nearMissCount < MAX_NEAR_MISSES) {
+          const n = this.nearMissCount++;
+          this.nearMissActor[n] = actor;
+          this.nearMissT[n] = t;
+          this.nearMissCloseness[n] = 1 - (Math.sqrt(distSq) - r) / 1.4;
         }
         continue;
       }
 
-      // Parametric position of closest approach, used to order multiple hits
-      // and to interpolate the impact height.
-      const dx = x1 - x0;
-      const dy = y1 - y0;
-      const lenSq = dx * dx + dy * dy;
-      const t = lenSq > 0 ? clamp01(((actor.x - x0) * dx + (actor.y - y0) * dy) / lenSq) : 0;
-
       // Vertical check: is the round at body height when it passes?
-      const impactZ = z0 + (z1 - z0) * t;
       if (impactZ < 0 || impactZ > actor.height) continue;
 
       if (t < bestT) {
@@ -302,13 +383,20 @@ export class BallisticsSystem {
       }
     }
 
-    if (!bestActor) return false;
+    this.hitActor = bestActor;
+    this.hitT = bestActor ? bestT : 0;
+  }
 
-    const impactX = x0 + (x1 - x0) * bestT;
-    const impactY = y0 + (y1 - y0) * bestT;
-    const impactZ = z0 + (z1 - z0) * bestT;
-    this.resolveActorHit(p, bestActor, impactX, impactY, impactZ);
-    return true;
+  /** Report the near misses that happened before the round was stopped. */
+  private flushNearMisses(p: Projectile, limitT: number): void {
+    for (let i = 0; i < this.nearMissCount; i++) {
+      if (this.nearMissT[i] <= limitT) {
+        this.nearMissActor[i]?.onNearMiss?.(p.ownerId, this.nearMissCloseness[i], p.x, p.y);
+      }
+      // Dropped so the pool never pins a dead combatant alive.
+      this.nearMissActor[i] = null;
+    }
+    this.nearMissCount = 0;
   }
 
   /**
@@ -407,11 +495,14 @@ export class BallisticsSystem {
   }
 
   /**
-   * Walk the tiles the segment crosses, resolving barrier penetration.
-   * Returns true when the projectile is stopped.
+   * Record every barrier the segment physically runs into, in order.
+   *
+   * Pure geometry - nothing here decides whether the round gets through, so
+   * the caller is free to discard barriers that sit behind an actor the round
+   * reached first. The height test is what lets a round pass over a crate or
+   * under a raised beam, and it is the same test the renderer draws from.
    */
-  private testGeometry(
-    p: Projectile,
+  private collectBarriers(
     map: TileMap,
     x0: number,
     y0: number,
@@ -420,58 +511,76 @@ export class BallisticsSystem {
     y1: number,
     z1: number,
     segLen: number,
-  ): boolean {
-    let stopped = false;
+  ): void {
+    this.barrierCount = 0;
 
     walkSegment(x0, y0, x1, y1, (tx, ty, dist) => {
       if (!map.isWall(tx, ty)) return true;
 
-      // Height check: a round can pass over a crate or under a raised beam.
-      const tileHeightM = map.heightOf(tx, ty);
       const t = segLen > 0 ? clamp01(dist / segLen) : 0;
       const impactZ = z0 + (z1 - z0) * t;
-      if (impactZ > tileHeightM) return true; // sails over the obstacle
+      if (impactZ > map.heightOf(tx, ty)) return true; // sails over the obstacle
 
-      const resistance = map.penetrationOf(tx, ty);
-      const impactX = x0 + (x1 - x0) * t;
-      const impactY = y0 + (y1 - y0) * t;
-      const len = Math.hypot(p.vx, p.vy) || 1;
+      const n = this.barrierCount;
+      this.barrierT[n] = t;
+      this.barrierX[n] = tx;
+      this.barrierY[n] = ty;
+      this.barrierCount = n + 1;
+      return this.barrierCount < MAX_BARRIERS;
+    });
+  }
 
-      if (p.penetration <= resistance || p.barriersHit >= 3) {
-        // Stopped. Sparks fly back along the incoming direction.
-        this.effects.bulletImpact(impactX, impactY, impactZ / METERS_PER_TILE, -p.vx / len, -p.vy / len, resistance > 20);
-        this.bus.emit('sound:emit', {
-          x: impactX, y: impactY, radius: 9, intensity: 0.35,
-          kind: resistance > 40 ? 'ricochet' : 'impact', sourceId: p.ownerId,
-        });
-        stopped = true;
-        return false;
-      }
+  /**
+   * Resolve one recorded barrier against the projectile's current state.
+   * Returns false when the round is stopped here.
+   */
+  private resolveBarrier(
+    p: Projectile,
+    map: TileMap,
+    index: number,
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+  ): boolean {
+    const tx = this.barrierX[index];
+    const ty = this.barrierY[index];
+    const t = this.barrierT[index];
+    const resistance = map.penetrationOf(tx, ty);
+    const impactX = x0 + (x1 - x0) * t;
+    const impactY = y0 + (y1 - y0) * t;
+    const impactZ = z0 + (z1 - z0) * t;
+    const len = Math.hypot(p.vx, p.vy) || 1;
 
-      // Punched through: bleed off penetration and energy.
-      const loss = map.energyLossOf(tx, ty);
-      p.penetration -= resistance;
-      p.damage *= 1 - loss * 0.7;
-      const speedScale = 1 - loss * 0.55;
-      p.vx *= speedScale;
-      p.vy *= speedScale;
-      p.vz *= speedScale;
-      p.speed *= speedScale;
-      p.barriersHit++;
-
+    if (p.penetration <= resistance || p.barriersHit >= 3) {
+      // Stopped. Sparks fly back along the incoming direction.
       this.effects.bulletImpact(impactX, impactY, impactZ / METERS_PER_TILE, -p.vx / len, -p.vy / len, resistance > 20);
       this.bus.emit('sound:emit', {
-        x: impactX, y: impactY, radius: 8, intensity: 0.3, kind: 'impact', sourceId: p.ownerId,
+        x: impactX, y: impactY, radius: 9, intensity: 0.35,
+        kind: resistance > 40 ? 'ricochet' : 'impact', sourceId: p.ownerId,
       });
+      return false;
+    }
 
-      if (p.damage < 4 || p.speed < MIN_LETHAL_VELOCITY) {
-        stopped = true;
-        return false;
-      }
-      return true;
+    // Punched through: bleed off penetration and energy.
+    const loss = map.energyLossOf(tx, ty);
+    p.penetration -= resistance;
+    p.damage *= 1 - loss * 0.7;
+    const speedScale = 1 - loss * 0.55;
+    p.vx *= speedScale;
+    p.vy *= speedScale;
+    p.vz *= speedScale;
+    p.speed *= speedScale;
+    p.barriersHit++;
+
+    this.effects.bulletImpact(impactX, impactY, impactZ / METERS_PER_TILE, -p.vx / len, -p.vy / len, resistance > 20);
+    this.bus.emit('sound:emit', {
+      x: impactX, y: impactY, radius: 8, intensity: 0.3, kind: 'impact', sourceId: p.ownerId,
     });
 
-    return stopped;
+    return p.damage >= 4 && p.speed >= MIN_LETHAL_VELOCITY;
   }
 
   /** Convert a weapon's dispersion in MOA into a cone half-angle in radians. */

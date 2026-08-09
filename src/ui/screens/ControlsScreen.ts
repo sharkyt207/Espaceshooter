@@ -200,6 +200,15 @@ export class ControlsScreen implements Screen {
     );
     content.appendChild(
       this.sliderRow(
+        'Höhe der Laufzone',
+        touch.moveZoneHeight, 0.4, 1,
+        (v) => { touch.moveZoneHeight = v; this.touched(); },
+        (v) => `${Math.round(v * 100)} %`,
+        'Wie weit die Laufzone nach oben reicht. Darüber dreht auch links die Kamera.',
+      ),
+    );
+    content.appendChild(
+      this.sliderRow(
         'Stickweg',
         touch.stickRadius, 36, 120,
         (v) => { touch.stickRadius = Math.round(v); this.touched(); },

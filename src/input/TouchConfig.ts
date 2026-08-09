@@ -93,6 +93,21 @@ export interface TouchConfig {
    * small phone and a tablet.
    */
   moveZoneWidth: number;
+  /**
+   * How far up the screen the stick zone reaches, as a fraction of height.
+   *
+   * Added because the zone was a full-height column and that cost the player
+   * 42 % of the screen for looking. Measured: a camera swipe starting anywhere
+   * in the left column produced exactly zero camera movement - including over
+   * the vitals panel, which sits in it - while the same swipe on the right
+   * moved 0.35 rad. That is the "I swipe and nothing happens" complaint, and
+   * it was most of the screen.
+   *
+   * A thumb rests low. Bounding the zone to the bottom two thirds frees the
+   * upper left for looking without moving where anyone actually puts their
+   * thumb.
+   */
+  moveZoneHeight: number;
   /** Stick throw in CSS pixels before the input reads as fully deflected. */
   stickRadius: number;
   /** Fixed stick position instead of one that appears where the thumb lands. */
@@ -142,6 +157,7 @@ export function defaultTouchConfig(): TouchConfig {
     gyroScale: 1,
     aimAssist: 0.15,
     moveZoneWidth: 0.42,
+    moveZoneHeight: 0.66,
     stickRadius: 66,
     fixedStick: false,
     buttons: defaultButtons(),

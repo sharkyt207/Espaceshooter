@@ -61,6 +61,19 @@ export interface TileDef {
   readonly solid: boolean;
   /** Blocks line of sight (and therefore rendering as a wall). */
   readonly opaque: boolean;
+  /**
+   * The *material* can be seen through, whatever its height.
+   *
+   * Split out from `opaque` because that one flag was carrying two unrelated
+   * meanings: "you can see through this stuff" (chain-link, glass) and "this
+   * is short enough to see over" (a crate). Both ended up as `opaque: false`,
+   * so nothing in the game could tell them apart - and the consequence was
+   * that lying down behind a solid wooden crate hid you from bullets but not
+   * from eyes, because sight was tested flat while ballistics was tested in
+   * three dimensions. Height decides whether you see *over* something; this
+   * decides whether you see *through* it.
+   */
+  readonly seeThrough: boolean;
   /** Renders as a full-height wall surface. */
   readonly wall: boolean;
   /**
@@ -94,6 +107,7 @@ function def(
     name,
     solid: false,
     opaque: false,
+    seeThrough: false,
     wall: false,
     height: 0,
     penetration: 0,
@@ -131,13 +145,13 @@ export const TILE_DEFS: readonly TileDef[] = [
   }),
   // Fences block movement but not sight - readable sightlines, no free cover.
   def(Tile.Fence, 'Maschendraht', {
-    solid: true, opaque: false, wall: true, height: 2.2, penetration: 4,
+    solid: true, opaque: false, seeThrough: true, wall: true, height: 2.2, penetration: 4,
     energyLoss: 0.05, soundDamping: 0.02, texture: 6, tint: 0x5c6060,
   }),
   // Window band: see through it and shoot through it, but you cannot walk
   // through it. Cheap glass means windows are lethal cover, which is the point.
   def(Tile.Window, 'Fensterband', {
-    solid: true, opaque: false, wall: true, height: 3, penetration: 3,
+    solid: true, opaque: false, seeThrough: true, wall: true, height: 3, penetration: 3,
     energyLoss: 0.04, soundDamping: 0.05, texture: 7, tint: 0x7fa8b0,
   }),
   def(Tile.DoorClosed, 'Tür', {
@@ -160,7 +174,7 @@ export const TILE_DEFS: readonly TileDef[] = [
   def(Tile.Water, 'Wasser', { moveCost: 2.6, texture: 12, tint: 0x2f4a58, footstepLoudness: 2.2 }),
   def(Tile.Grate, 'Gitterrost', { texture: 13, tint: 0x5a5e60, footstepLoudness: 2.4 }),
   def(Tile.Glass, 'Glasfront', {
-    solid: true, opaque: false, wall: true, height: 3, penetration: 2,
+    solid: true, opaque: false, seeThrough: true, wall: true, height: 3, penetration: 2,
     energyLoss: 0.03, soundDamping: 0.05, texture: 14, tint: 0x8fc4cc,
   }),
 ];
@@ -168,6 +182,7 @@ export const TILE_DEFS: readonly TileDef[] = [
 /** Fast lookup tables - hot loops index these instead of the object array. */
 const SOLID = new Uint8Array(TILE_COUNT);
 const OPAQUE = new Uint8Array(TILE_COUNT);
+const SEE_THROUGH = new Uint8Array(TILE_COUNT);
 const WALL = new Uint8Array(TILE_COUNT);
 const PENETRATION = new Float32Array(TILE_COUNT);
 const ENERGY_LOSS = new Float32Array(TILE_COUNT);
@@ -177,6 +192,7 @@ const HEIGHT = new Float32Array(TILE_COUNT);
 for (const d of TILE_DEFS) {
   SOLID[d.id] = d.solid ? 1 : 0;
   OPAQUE[d.id] = d.opaque ? 1 : 0;
+  SEE_THROUGH[d.id] = d.seeThrough ? 1 : 0;
   WALL[d.id] = d.wall ? 1 : 0;
   PENETRATION[d.id] = d.penetration;
   ENERGY_LOSS[d.id] = d.energyLoss;
@@ -264,6 +280,22 @@ export class TileMap {
   isOpaque(x: number, y: number): boolean {
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return true;
     return OPAQUE[this.tiles[y * this.width + x]] === 1;
+  }
+
+  /**
+   * Does this tile block a sight ray passing over it at `z` metres?
+   *
+   * The three-dimensional counterpart of `isOpaque`, and the test the AI now
+   * uses. Chain-link and glass never block, whatever their height. Everything
+   * else blocks only what passes below its top edge, which is what makes going
+   * prone behind a crate mean something: the round is stopped by the same edge,
+   * so what an enemy can see and what it can hit finally agree.
+   */
+  blocksSightAt(x: number, y: number, z: number): boolean {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return true;
+    const t = this.tiles[y * this.width + x];
+    if (WALL[t] === 0 || SEE_THROUGH[t] === 1) return false;
+    return z <= HEIGHT[t];
   }
 
   /** Renders as a wall surface (may still be see-through, e.g. fences/glass). */

@@ -311,6 +311,7 @@ export class Enemy implements Combatant {
         observerX: this.x,
         observerY: this.y,
         observerAngle: this.angle,
+        observerEyeHeight: this.eyeHeight,
         hearingMultiplier: this.inventory.stats.hearingFactor,
         suppressed: this.suppression > 0.4,
         // Hearing is not range-gated by the weather here: the sound event
@@ -368,6 +369,7 @@ export class Enemy implements Combatant {
         observerX: this.x,
         observerY: this.y,
         observerAngle: this.angle,
+        observerEyeHeight: this.eyeHeight,
         hearingMultiplier: this.inventory.stats.hearingFactor,
         suppressed: this.suppression > 0.4,
         sightScale: ctx.sightScale,

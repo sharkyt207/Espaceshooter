@@ -7,7 +7,8 @@ import { Pool } from '../src/core/Pool';
 import { angleDelta, clamp, damp, pointSegmentDistSq, wrapAngle } from '../src/core/Math2D';
 import { EventBus } from '../src/core/EventBus';
 import { Tile, TileMap } from '../src/world/TileMap';
-import { hasLineOfSight, walkSegment } from '../src/world/Raycast';
+import { hasLineOfSight, hasLineOfSightAt, walkSegment } from '../src/world/Raycast';
+import { blueprintById } from '../src/data/MapData';
 import { circleFits, moveCircle } from '../src/world/Physics';
 import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
@@ -1011,6 +1012,7 @@ describe('Perception', () => {
     observerX: 4,
     observerY: 32,
     observerAngle: 0,
+    observerEyeHeight: 1.6,
     hearingMultiplier: 1,
     suppressed: false,
     sightScale,
@@ -2505,5 +2507,285 @@ describe('AI behaviour', () => {
     }
 
     assert.equal(enemy.state, 'flee', `a badly wounded scavenger should break off, was ${enemy.state}`);
+  });
+});
+
+describe('Cover has to be honest', () => {
+  /**
+   * The complaint this block exists for was "I get shot by enemies I cannot
+   * see". It turned out to be two separate defects that produced the same
+   * feeling, and both are measured here rather than described.
+   *
+   * The first was ordering. A step of the projectile integrator is not short -
+   * a rifle round covers about 360 tiles a second, which is six tiles at 60 Hz
+   * and twelve at 30 - and every actor along the whole step used to be resolved
+   * before a single wall was looked at. So a round was credited with a hit on
+   * someone three tiles behind concrete whenever the wall and the target
+   * happened to land in the same step. Whether that happened depended on
+   * nothing but the phase of the integration against the wall's position, which
+   * is exactly why being shot through cover felt arbitrary instead of unfair.
+   *
+   * The second was that sight and ballistics disagreed about what an obstacle
+   * is. Rounds were tested in three dimensions against tile height; vision was
+   * a flat "is any tile between us opaque". A crate is not opaque, because you
+   * can see over it - so an enemy could watch a prone player through a solid
+   * wooden box that its own rounds could not pass.
+   */
+
+  const bus = new EventBus<Record<string, never>>() as never;
+
+  /** A corridor with one full-height wall of `tile` across it at x = 20. */
+  const corridor = (tile: Tile | null): TileMap => {
+    const map = new TileMap(40, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 40; x++) map.set(x, y, Tile.Floor);
+    if (tile !== null) for (let y = 0; y < 8; y++) map.set(20, y, tile);
+    return map;
+  };
+
+  interface ShotResult {
+    /** Damage the target took, in hit points. */
+    damage: number;
+    /** True when the round's passage suppressed the target. */
+    suppressed: boolean;
+  }
+
+  /**
+   * Fire one round down the corridor at a target `beyond` tiles past the wall
+   * and report what reached them.
+   *
+   * The muzzle sits at 1.5 m and the shot is flat, which is the case that
+   * matters: it clears a 1.2 m crate and is stopped by anything full height.
+   */
+  const shoot = (map: TileMap, ammoId: string, dt: number, targetX: number): ShotResult => {
+    const health = new HealthSystem(bus, true);
+    let suppressed = false;
+    const target = {
+      id: 2, isPlayer: true, name: 'Ziel',
+      x: targetX, y: 4.5, angle: 0, pitch: 0,
+      radius: 0.28, height: 1.8, eyeHeight: 1.62,
+      get alive(): boolean { return !health.dead; },
+      health, inventory: new Inventory(),
+      onNearMiss: () => { suppressed = true; },
+    } as unknown as Combatant;
+
+    const ballistics = new BallisticsSystem(bus, new EffectSystem(64, 64), 5);
+    ballistics.fire({
+      originX: 2.5, originY: 4.5, originZ: 1.5, dirX: 1, dirY: 0, pitch: 0,
+      ammoDefId: ammoId, ownerId: 1, ownerIsPlayer: false, spreadRad: 0, velocityBonus: 0,
+    });
+
+    const before = health.totalHp;
+    for (let i = 0; i < 400 && ballistics.activeCount > 0; i++) {
+      ballistics.update(dt, map, (x, y, r, out) => {
+        out.length = 0;
+        if (Math.hypot(target.x - x, target.y - y) <= r + target.radius) out.push(target.id);
+      }, (id) => (id === target.id ? target : undefined));
+    }
+    return { damage: before - health.totalHp, suppressed };
+  };
+
+  test('no round reaches a target behind concrete, at any frame rate', () => {
+    // Both rates matter and for different reasons: 60 Hz is what a good phone
+    // runs, 30 Hz is what a cheap one settles at, and the old defect appeared
+    // at both but at different distances. The distances are swept because a
+    // single wall position only samples one phase of the integration - the
+    // version of this test that checked one distance passed against the broken
+    // code, which is how the bug survived this long.
+    for (const ammo of ['ammo_545_bp', 'ammo_762n_ap', 'ammo_9_ap', 'ammo_12_buck']) {
+      for (const dt of [1 / 60, 1 / 30]) {
+        for (let wallGap = 1; wallGap <= 6; wallGap++) {
+          const map = corridor(Tile.Concrete);
+          const r = shoot(map, ammo, dt, 20.5 + wallGap);
+          assert.equal(
+            r.damage, 0,
+            `${ammo} at 1/${Math.round(1 / dt)} s went through concrete to a target ` +
+              `${wallGap} tiles behind it (${r.damage.toFixed(1)} damage)`,
+          );
+          assert.equal(
+            r.suppressed, false,
+            `${ammo} at 1/${Math.round(1 / dt)} s suppressed a target ${wallGap} tiles ` +
+              'behind concrete - a round stopped by a wall never got near anyone',
+          );
+        }
+      }
+    }
+  });
+
+  test('but cover is not a force field: height and material still decide', () => {
+    // Without this the test above is satisfied by making every round harmless,
+    // which is a far easier way to pass it than fixing the ordering.
+    const dt = 1 / 60;
+    const open = shoot(corridor(null), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(open > 20, `an unobstructed round should hurt, dealt ${open.toFixed(1)}`);
+
+    // A crate is 1.2 m; a flat shot from a 1.5 m muzzle passes over it. Cover
+    // you are standing up behind is not cover.
+    const overCrate = shoot(corridor(Tile.Crate), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(
+      Math.abs(overCrate - open) < 0.01,
+      `a flat shot should sail over a 1.2 m crate, dealt ${overCrate.toFixed(1)} vs ${open.toFixed(1)}`,
+    );
+
+    // A wooden wall is full height but soft: the round arrives, weakened.
+    const throughWood = shoot(corridor(Tile.Wood), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(
+      throughWood > 0 && throughWood < open * 0.85,
+      `a 5.45 penetrator should punch through wood and arrive weaker, ` +
+        `dealt ${throughWood.toFixed(1)} vs ${open.toFixed(1)} in the open`,
+    );
+
+    // Ordering cuts both ways. A wall the round would have hit *after* the
+    // target must not touch it: standing with your back to concrete does not
+    // make you harder to kill.
+    const backToWall = shoot(corridor(Tile.Concrete), 'ammo_545_bp', dt, 19.4).damage;
+    assert.ok(
+      Math.abs(backToWall - open) < 0.01,
+      `a target in front of the wall should take the full round, dealt ` +
+        `${backToWall.toFixed(1)} vs ${open.toFixed(1)} in the open - the barrier behind ` +
+        'them is bleeding energy off a round that never reached it',
+    );
+  });
+
+  test('what an enemy can see is what an enemy could hit', () => {
+    /**
+     * The invariant, stated as the player experiences it: if an enemy has your
+     * eye line, a round down that same line can arrive. Any pair where sight is
+     * clear and the shot is not is a position where you are seen and shot at
+     * from somewhere you have no way to answer.
+     *
+     * Measured on real generated maps rather than a hand-built arena, because
+     * the disagreement came from the shapes the generator actually produces -
+     * crate rows and low walls - and an arena would have been built from
+     * whichever tiles I already had in mind.
+     */
+    const stances = [
+      { name: 'stehend', eye: 1.62 },
+      { name: 'geduckt', eye: 1.05 },
+      { name: 'liegend', eye: 0.45 },
+    ];
+    const OBSERVER_EYE = 1.6;
+
+    /** Geometry only: can a round travelling this line reach the far end? */
+    const shotArrives = (
+      map: TileMap, ax: number, ay: number, az: number, bx: number, by: number, bz: number,
+    ): boolean => {
+      const segLen = Math.hypot(bx - ax, by - ay);
+      let clear = true;
+      walkSegment(ax, ay, bx, by, (tx, ty, dist) => {
+        if (!map.isWall(tx, ty)) return true;
+        const z = az + (bz - az) * (segLen > 0 ? dist / segLen : 0);
+        if (z > map.heightOf(tx, ty)) return true;         // over the top
+        if (map.penetrationOf(tx, ty) < 8) return true;    // glass, wire mesh
+        clear = false;
+        return false;
+      });
+      return clear;
+    };
+
+    for (const id of ['works', 'yard']) {
+      const map = generateMap(blueprintById(id), 4242).map;
+      const open: Array<{ x: number; y: number }> = [];
+      for (let y = 1; y < map.height - 1; y++) {
+        for (let x = 1; x < map.width - 1; x++) if (!map.isSolid(x, y)) open.push({ x, y });
+      }
+
+      for (const stance of stances) {
+        const rng = new Rng(4242);
+        let pairs = 0;
+        let visible = 0;
+        let unanswerable = 0;
+        while (pairs < 6000) {
+          const a = open[rng.int(0, open.length - 1)];
+          const b = open[rng.int(0, open.length - 1)];
+          const ax = a.x + 0.5, ay = a.y + 0.5, bx = b.x + 0.5, by = b.y + 0.5;
+          const d = Math.hypot(bx - ax, by - ay);
+          if (d < 2 || d > 30) continue;
+          pairs++;
+          if (!hasLineOfSightAt(map, ax, ay, OBSERVER_EYE, bx, by, stance.eye)) continue;
+          visible++;
+          if (!shotArrives(map, ax, ay, OBSERVER_EYE, bx, by, stance.eye)) unanswerable++;
+        }
+
+        assert.ok(visible > 200, `${id}/${stance.name}: only ${visible} visible pairs, too few to mean anything`);
+        assert.equal(
+          unanswerable, 0,
+          `${id}/${stance.name}: ${unanswerable} of ${visible} visible pairs are positions where ` +
+            'an enemy sees you through something its own rounds cannot pass',
+        );
+      }
+    }
+  });
+
+  test('going prone behind a crate actually hides you', () => {
+    // The flat test cannot tell a crate from a chain-link fence, so this is the
+    // case that pins the difference down. Standing, your head shows over the
+    // box; lying down, it does not - and a wire fence hides nobody either way.
+    const map = new TileMap(24, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 24; x++) map.set(x, y, Tile.Floor);
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Crate);
+
+    const see = (eye: number): boolean => hasLineOfSightAt(map, 4.5, 4.5, 1.6, 18.5, 4.5, eye);
+    assert.equal(see(1.62), true, 'a standing head shows over a 1.2 m crate');
+    assert.equal(see(0.45), false, 'someone lying down behind a 1.2 m crate is not visible');
+
+    // The flat predicate cannot express any of that, which is the bug.
+    assert.equal(
+      hasLineOfSight(map, 4.5, 4.5, 18.5, 4.5), true,
+      'the flat test sees straight through the crate at every height - kept as a ' +
+        'reminder of why the height-aware one exists',
+    );
+
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Fence);
+    assert.equal(see(0.45), true, 'chain-link is see-through at any height');
+
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Concrete);
+    assert.equal(see(1.62), false, 'concrete blocks the view of a standing target');
+  });
+
+  test('and the AI actually uses that, rather than merely having it available', () => {
+    /**
+     * The test above proves the predicate is correct. This one proves the AI
+     * calls it - which is a different claim, and the one that has been wrong
+     * here more often. Aim assist, the particle budget, the doors and the AI's
+     * own pathfinding were each fully written and connected to nothing; every
+     * check that read the code passed, and every check that measured behaviour
+     * would have failed. So: drive `updateVision` itself and watch what an
+     * observer concludes about a man lying behind a crate.
+     */
+    const map = new TileMap(24, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 24; x++) map.set(x, y, Tile.Floor);
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Crate);
+    // Full daylight, so nothing but geometry can explain a failure to see.
+    map.lightmap.fill(255);
+
+    const observer: PerceptionInput = {
+      observerX: 4.5, observerY: 4.5, observerAngle: 0, observerEyeHeight: 1.6,
+      hearingMultiplier: 1, suppressed: false, sightScale: 1,
+    };
+    const targetAt = (eyeHeight: number, height: number): Combatant => ({
+      id: 1, x: 18.5, y: 4.5, radius: 0.3, height, eyeHeight, angle: 0,
+      health: null as never, inventory: null as never,
+      isPlayer: true, name: 'Ziel', alive: true,
+    });
+
+    const watch = (target: Combatant, stance: number): boolean => {
+      const awareness = createAwareness();
+      const profile = AI_PROFILES.guard;
+      // Three seconds of looking straight at them is far past any acquire time.
+      for (let i = 0; i < 90; i++) {
+        updateVision(awareness, profile, observer, target, map, 1 / 30, 0, stance, 0);
+      }
+      return awareness.visible;
+    };
+
+    assert.equal(
+      watch(targetAt(1.62, 1.8), 2), true,
+      'a standing man is visible over a 1.2 m crate - if this fails the test below proves nothing',
+    );
+    assert.equal(
+      watch(targetAt(0.45, 0.6), 0), false,
+      'a man lying behind a 1.2 m crate is still being seen: the perception path is ' +
+        'not using the height-aware line of sight',
+    );
   });
 });

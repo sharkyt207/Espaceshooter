@@ -1919,3 +1919,32 @@ html, body {
 @media (max-height: 400px) {
   .map-legend { display: none !important; }
 }
+
+/* --- touch targets larger than the graphic -------------------------------
+   Measured before changing anything: six pixels outside the fire button's
+   edge hit nothing at all. The interactive area was exactly the drawn circle,
+   so a thumb landing slightly off simply did not fire - which is the "I have
+   to press twice" complaint.
+
+   A thumb contact patch is roughly 9 mm; at typical phone density that is 30
+   to 40 px, and the finger's reported point is not its centre. The graphic
+   stays the size it is, and an invisible ring extends the target beyond it.
+
+   `::before` rather than padding because these are absolutely positioned
+   circles whose size is written by the layout config - growing the box would
+   move the graphic. */
+.touch-btn::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  /* Nothing to see; this exists purely to be hit. */
+}
+
+/* The corner strip (INV / KARTE / MENÜ) is rectangular and sits against the
+   screen edge, so it grows inwards only - a ring there would reach off-screen
+   on one side and overlap its neighbour on the other. */
+.touch-corner .touch-btn::before {
+  inset: -8px -4px;
+  border-radius: var(--radius);
+}
