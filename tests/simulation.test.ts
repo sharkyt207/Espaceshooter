@@ -3163,3 +3163,83 @@ describe('Roads go somewhere, and not in a straight line', () => {
     }
   });
 });
+
+describe('The place goes on without you watching', () => {
+  /**
+   * Enemies far from the player are skipped by the director - no pathfinding,
+   * no line of sight, no weapon logic - because all three are expensive and
+   * nobody can observe the result at that range. That is the right call and it
+   * is not what this test is about.
+   *
+   * What it is about is that being skipped used to mean being frozen. Measured
+   * on the harbour: after a minute of raid, thirty of thirty-eight hostiles
+   * had not moved a step. A player who walked eighty tiles to the far side of
+   * the map found every one of them standing exactly where it spawned, in
+   * every raid, for the full thirty minutes - so the spawn table was worth
+   * learning once and never changed after. Distant hostiles now walk their
+   * round by dead reckoning, which costs a few arithmetic operations each and
+   * measured as no change at all in the simulation budget.
+   */
+
+  const stubAudio = () => ({
+    listener: { x: 0, y: 0, angle: 0, hearingFactor: 1, deafness: 0 },
+    setAmbience: () => {}, stopAmbience: () => {}, playThunder: () => {},
+    play: () => {}, applyMuzzleDeafness: () => {}, update: () => {},
+  });
+
+  test('hostiles across the map keep walking their rounds', () => {
+    // The harbour, because it is the location where this went wrong: 160 tiles
+    // across against a freeze radius of 60, so most of the garrison is out of
+    // range from anywhere the player can stand.
+    const bus = new EventBus<Record<string, never>>() as never;
+    const blueprint = MAP_BLUEPRINTS.find((b) => b.id === 'harbour')!;
+    const profile = new Profile(bus, 11);
+    const session = new RaidSession(bus, profile, stubAudio() as never, blueprint, 11);
+    (session.player.health as unknown as { applyDamage: () => void }).applyDamage = () => {};
+
+    const enemies = (session as unknown as {
+      ai: { enemies: Array<{ x: number; y: number; alive: boolean }> };
+    }).ai.enemies;
+    assert.ok(enemies.length > 20, `expected a full garrison, got ${enemies.length}`);
+
+    const start = enemies.map((e) => ({ x: e.x, y: e.y }));
+    const dt = 1 / 20;
+    for (let step = 0; step < 40 * 20; step++) {
+      session.update(dt);
+    }
+
+    // Straight-line displacement, not distance walked: a hostile that wandered
+    // in a circle and came home has still been somewhere, but this is the
+    // conservative measure and the frozen case scores exactly zero on it.
+    let moved = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      if (!enemies[i].alive) continue;
+      if (Math.hypot(enemies[i].x - start[i].x, enemies[i].y - start[i].y) > 3) moved++;
+    }
+    const alive = enemies.filter((e) => e.alive).length;
+
+    assert.ok(
+      moved > alive * 0.6,
+      `only ${moved} of ${alive} surviving hostiles left the tile they spawned on after ` +
+        '40 seconds - the far side of the map is a diorama',
+    );
+  });
+
+  test('and a location has enough rounds to walk that they are not all the same one', () => {
+    // The drift above needs a route to follow, and the generator was handing
+    // out three for thirteen districts on the densest map: the line-of-sight
+    // test between consecutive legs was written for open yards and rejects
+    // almost everything in a warren, so most of the garrison shared a handful
+    // of identical rounds or had none.
+    for (const bp of MAP_BLUEPRINTS) {
+      const g = generateMap(bp, 11);
+      assert.ok(
+        g.patrolRoutes.length >= Math.min(6, g.map.zones.length),
+        `${bp.id}: ${g.patrolRoutes.length} patrol routes for ${g.map.zones.length} districts`,
+      );
+      for (const route of g.patrolRoutes) {
+        assert.ok(route.points.length >= 2, `${bp.id}: a route with ${route.points.length} waypoints is not a round`);
+      }
+    }
+  });
+});

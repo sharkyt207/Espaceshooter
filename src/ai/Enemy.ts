@@ -113,6 +113,61 @@ export class Enemy implements Combatant {
   private patrolIndex = 0;
   private patrolPause = 0;
 
+  /**
+   * Walk the patrol route without thinking about it.
+   *
+   * Enemies far enough from the player to be unobservable are skipped entirely
+   * by the director, which is the right call for pathfinding and perception -
+   * both are expensive and nobody can see the result. What it also did was
+   * freeze them in place, and that *is* observable: on the harbour, thirty of
+   * thirty-eight hostiles had not moved a step after a minute, so a player who
+   * walked eighty tiles to the far side of the map found everyone standing
+   * exactly where they spawned, in every raid, for thirty minutes. Learning
+   * the spawn table once and finding it still true is the opposite of what a
+   * location is for.
+   *
+   * So: distant hostiles keep walking their round, by dead reckoning. No path,
+   * no line of sight, no weapon - a step towards the next waypoint and a
+   * collision test, which is a handful of arithmetic. They stay where the
+   * player would expect to find them if the place had been going on without
+   * them watching, and the moment they come inside the director's range the
+   * full simulation picks them up wherever they now are.
+   */
+  drift(dt: number, map: TileMap): void {
+    const route = this.patrolRoute;
+    if (!route || route.points.length === 0) return;
+
+    if (this.patrolPause > 0) {
+      this.patrolPause -= dt;
+      return;
+    }
+
+    const point = route.points[this.patrolIndex];
+    const dx = point.x - this.x;
+    const dy = point.y - this.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 1.2) {
+      this.patrolIndex = (this.patrolIndex + 1) % route.points.length;
+      this.patrolPause = this.rng.range(1.5, 4.5);
+      return;
+    }
+
+    // Deliberately a straight line rather than a path. Patrol legs are already
+    // built line-of-sight connected, so a straight walk between them stays on
+    // open ground; where it does not, the collision test slides along whatever
+    // it meets and the waypoint is reached from a slightly different angle, or
+    // not at all until the next leg. Nobody is watching closely enough for the
+    // difference to matter, and buying a path for it would spend exactly the
+    // budget this exists to save.
+    const speed = 1.15;
+    const step = Math.min(dist, speed * dt);
+    const moved = moveCircle(map, this.x, this.y, (dx / dist) * step, (dy / dist) * step, this.radius);
+    this.x = moved.x;
+    this.y = moved.y;
+    this.angle = Math.atan2(dy, dx);
+    this.speed = speed;
+  }
+
   /** Current path in world space. */
   private path: { x: number; y: number }[] = [];
   private pathIndex = 0;

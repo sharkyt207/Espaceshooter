@@ -1344,27 +1344,43 @@ function buildSpawns(
   }
 }
 
+/**
+ * Rounds for the garrison to walk.
+ *
+ * Two things were wrong with the fixed count of eight. It did not scale, so a
+ * sixteen-district harbour and a three-district yard were offered the same
+ * number; and the line-of-sight requirement between consecutive legs was
+ * written when locations were open yards, so on a dense plant it rejected
+ * almost every candidate and the generator delivered three routes for
+ * thirteen districts. Enemies then shared a handful of identical rounds, or
+ * had none at all and stood where they spawned.
+ *
+ * Now the count follows the districts, and sight between legs is a preference
+ * rather than a requirement: a round that goes round a corner is still a
+ * round, and it is what a patrol in a built-up site actually looks like.
+ */
 function buildPatrolRoutes(map: TileMap, rng: Rng, out: GeneratedMap): void {
-  const routeCount = 8;
+  const routeCount = Math.max(6, Math.min(18, Math.round(map.zones.length * 1.2)));
   for (let i = 0; i < routeCount; i++) {
     const points: { x: number; y: number }[] = [];
     const legs = rng.int(3, 5);
     let cursor: { x: number; y: number } | null = null;
     for (let l = 0; l < legs; l++) {
       let found: { x: number; y: number } | null = null;
-      for (let attempt = 0; attempt < 40; attempt++) {
+      // Two passes: the first insists on a clear line between legs, the second
+      // takes any open tile at a sensible distance. Most legs come out of the
+      // first pass on an open map and out of the second in a warren.
+      for (let attempt = 0; attempt < 60 && !found; attempt++) {
+        const requireSight = attempt < 40;
         const x = rng.int(3, map.width - 4);
         const y = rng.int(3, map.height - 4);
         if (map.isSolid(x, y) || map.at(x, y) === Tile.Water) continue;
-        // Keep legs a sensible length and roughly line-of-sight connected so
-        // patrols read as deliberate rounds rather than random wandering.
         if (cursor) {
           const d = Math.hypot(cursor.x - x, cursor.y - y);
           if (d < 6 || d > 26) continue;
-          if (!hasLineOfSight(map, cursor.x + 0.5, cursor.y + 0.5, x + 0.5, y + 0.5)) continue;
+          if (requireSight && !hasLineOfSight(map, cursor.x + 0.5, cursor.y + 0.5, x + 0.5, y + 0.5)) continue;
         }
         found = { x: x + 0.5, y: y + 0.5 };
-        break;
       }
       if (!found) break;
       points.push(found);
