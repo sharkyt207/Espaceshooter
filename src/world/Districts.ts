@@ -28,6 +28,27 @@ import { Tile } from './TileMap';
 
 export type RiskTier = 'low' | 'medium' | 'high';
 
+/**
+ * The shape of a building's footprint, seen from above.
+ *
+ * Every structure used to be a stroked rectangle, which is why the maps read as
+ * a box of boxes from the first screenshot. Real industrial buildings are
+ * rarely one clean oblong: a hall gets an office wing bolted to one end, a
+ * workshop wraps three sides of a service yard, an administration block encloses
+ * a courtyard.
+ *
+ * The shapes are cheap because each is a small union of rectangles, so all the
+ * existing machinery - partitioning, doorways, windows, lighting - runs per
+ * wing without knowing the building is not a box.
+ *
+ *   hall       one span, for anything that needs an uninterrupted floor
+ *   ell        two wings meeting at a corner
+ *   u          three wings around a yard open on one side
+ *   courtyard  four wings around an enclosed yard, open to the sky
+ *   annex      a main span with a smaller wing on one face
+ */
+export type FootprintKind = 'hall' | 'ell' | 'u' | 'courtyard' | 'annex';
+
 export interface DistrictKind {
   id: string;
   /** Shown on the map screen. Plural-free, it labels one building. */
@@ -54,6 +75,16 @@ export interface DistrictKind {
   subdivision: number;
   /** Preferred footprint in tiles, before the blueprint's scale is applied. */
   size: { min: number; max: number };
+  /**
+   * Shapes this kind of building is allowed to take, picked at random.
+   *
+   * A warehouse needs its floor uninterrupted, so it stays a hall whatever
+   * else is going on; an administration block is exactly the sort of thing
+   * that gets built around a courtyard. This is what stops the shape variety
+   * from being noise - the silhouette tells you what a building is before you
+   * have read its sign.
+   */
+  footprints: FootprintKind[];
 }
 
 /**
@@ -86,6 +117,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     // One hall, a couple of side rooms. Long interior sightlines.
     subdivision: 2,
     size: { min: 18, max: 26 },
+    footprints: ['hall', 'hall', 'annex'],
   },
 
   workshop: {
@@ -102,6 +134,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Wood,
     subdivision: 3,
     size: { min: 12, max: 18 },
+    footprints: ['ell', 'u', 'annex', 'hall'],
   },
 
   office: {
@@ -119,6 +152,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     // The warren. Corners everywhere, nothing to shoot across.
     subdivision: 5,
     size: { min: 12, max: 20 },
+    footprints: ['courtyard', 'u', 'ell', 'annex'],
   },
 
   medical: {
@@ -134,6 +168,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Wood,
     subdivision: 4,
     size: { min: 10, max: 16 },
+    footprints: ['ell', 'annex', 'hall'],
   },
 
   armoury: {
@@ -149,6 +184,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Concrete,
     subdivision: 3,
     size: { min: 12, max: 18 },
+    footprints: ['hall', 'annex'],
   },
 
   control: {
@@ -165,6 +201,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Brick,
     subdivision: 4,
     size: { min: 14, max: 22 },
+    footprints: ['courtyard', 'u', 'annex'],
   },
 
   plant: {
@@ -180,6 +217,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Metal,
     subdivision: 3,
     size: { min: 14, max: 20 },
+    footprints: ['hall', 'annex', 'ell'],
   },
 
   quarters: {
@@ -196,6 +234,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Wood,
     subdivision: 5,
     size: { min: 10, max: 16 },
+    footprints: ['u', 'courtyard', 'ell'],
   },
 
   depot: {
@@ -211,6 +250,7 @@ export const DISTRICTS: Record<string, DistrictKind> = {
     partition: Tile.Wood,
     subdivision: 2,
     size: { min: 14, max: 22 },
+    footprints: ['hall', 'hall', 'ell'],
   },
 };
 

@@ -376,6 +376,18 @@ export class TileMap {
     }
   }
 
+  /** Single-tile floor material. The rect form covers everything laid out in blocks. */
+  setFloor(x: number, y: number, material: Tile): void {
+    if (!this.inBounds(x, y)) return;
+    this.floor[y * this.width + x] = material;
+  }
+
+  /** Single-tile ceiling material; 0 means open sky. */
+  setCeiling(x: number, y: number, material: number): void {
+    if (!this.inBounds(x, y)) return;
+    this.ceiling[y * this.width + x] = material;
+  }
+
   fillFloorRect(x0: number, y0: number, x1: number, y1: number, material: Tile): void {
     for (let y = Math.max(0, y0); y <= Math.min(this.height - 1, y1); y++) {
       const row = y * this.width;

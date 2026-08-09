@@ -32,6 +32,24 @@ import type { MapBlueprint } from '../world/MapGenerator';
  * a stroll, and it is why the largest map also carries the longest clock.
  * Beyond that the walking stops being tension and starts being waiting.
  *
+ * ## What separates them, measured
+ *
+ * Each location has to own an axis, or it is a reskin. As built:
+ *
+ *              Sichtlinie   Innen    Strasse   Gebaeude   KI
+ *   harbour       16.5       16 %     22 %        16      34
+ *   depot         14.5       16 %     23 %        13      28
+ *   works          9.0       18 %     18 %        15      24
+ *   filter        12.2       23 %     12 %        28      26
+ *   yard          11.8       13 %     19 %         8      26
+ *
+ * Sightline is the mean outdoor view in tiles; interior is the roofed share of
+ * walkable ground. The harbour is the open one and the works the tight one, at
+ * nearly two to one; the Klaerwerk owns the interior axis outright, which is
+ * why it carries the darkness as well. Road share is a character lever in its
+ * own right: a haulage dock is organised around lorries, a process compound is
+ * walked.
+ *
  * All locations are original to this project.
  */
 
@@ -49,6 +67,8 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // long, so crossing the open is the decision this map asks.
     clutter: 0.3,
     structureScale: 1.15,
+    // A working dock is organised around lorries: the widest road network here.
+    roads: 4,
     anchor: 'control',
     districts: ['warehouse', 'depot', 'office', 'workshop', 'warehouse', 'quarters', 'medical'],
     water: true,
@@ -71,6 +91,7 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // ranges, neither a shooting gallery nor a knife fight.
     clutter: 1.1,
     structureScale: 1,
+    roads: 4,
     anchor: 'warehouse',
     districts: ['depot', 'workshop', 'office', 'depot', 'quarters', 'warehouse'],
     water: false,
@@ -87,12 +108,26 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     displayName: 'Kesselhaus West',
     width: 112,
     height: 112,
-    buildings: 18,
+    // Eased from 18. The works' identity is its sightline - the tightest lanes
+    // in the sector - not its roof area, and at eighteen it was quietly winning
+    // the interior axis that belongs to the Klaerwerk. Still the densest
+    // structure count per tile of any mid-sized location.
+    buildings: 15,
     containerYards: 8,
     // A plant packed into its plot: many structures, heavy debris between
     // them, corners everywhere. Short weapons and sound discipline win here.
-    clutter: 3.2,
+    //
+    // Eased from 3.2 once roads went in. Debris used to be the only thing
+    // supplying structure between the halls, so this location needed a great
+    // deal of it; with a road network carving the plots, 3.2 buried the routes
+    // completely - a top-down render came back as one undifferentiated field
+    // of rubble with no way through it visible at all. Still by far the
+    // tightest location: mean outdoor sightline about 9 tiles against the
+    // harbour's 21.
+    clutter: 2.6,
     structureScale: 0.8,
+    // A plant is walked, not driven. Two service roads and no more.
+    roads: 2,
     anchor: 'plant',
     districts: ['workshop', 'plant', 'quarters', 'workshop', 'depot', 'office'],
     water: false,
@@ -112,10 +147,18 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     // Many structures on a compact plot: the location is fought *through*
     // buildings rather than across a yard, which is the highest interior share
     // the generator reaches.
-    buildings: 22,
+    buildings: 28,
     containerYards: 3,
     clutter: 0.8,
-    structureScale: 1.1,
+    // Small structures, and a lot of them. Raised to 1.1 at one point, which
+    // over-subscribed the plot: twenty-two buildings at that size could not be
+    // fitted once roads were carving it, only seven or eight actually placed,
+    // and the location lost the property it exists for - being the one with
+    // the most interior. Small and numerous is also what the briefing promises.
+    structureScale: 1.0,
+    // A process compound: one access road, everything else is walkway between
+    // buildings. This is what buys the location its interior share back.
+    roads: 1,
     anchor: 'medical',
     districts: ['plant', 'workshop', 'quarters', 'plant', 'office', 'medical', 'depot'],
     water: true,
@@ -143,6 +186,7 @@ export const MAP_BLUEPRINTS: MapBlueprint[] = [
     containerYards: 7,
     clutter: 1.4,
     structureScale: 0.9,
+    roads: 2,
     anchor: 'armoury',
     districts: ['depot', 'workshop', 'quarters', 'depot'],
     water: false,

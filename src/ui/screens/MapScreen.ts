@@ -29,6 +29,61 @@ export class MapScreen implements Screen {
   /** Per-tile explored flag, sized on bind. */
   private explored: Uint8Array | null = null;
 
+  /**
+   * The impassable ground that bounds the site, computed once per raid.
+   *
+   * Drawn whether or not it has been explored, on the same reasoning the zone
+   * ratings already use: this is a briefed operation, and the shape of the
+   * place - a channel on one side, a rock cutting on another - is exactly what
+   * you would have been shown beforehand. What exploration reveals is the
+   * contents, not the coastline.
+   *
+   * Without it the map screen presented the location as a bare rectangle with
+   * some boxes inside, which is the same "square playfield" impression the
+   * world geometry was rebuilt to get rid of - undone on the one screen a
+   * player studies rather than glances at.
+   */
+  private outline: Uint8Array | null = null;
+
+  /**
+   * Flood the solid mass inwards from the map edge.
+   *
+   * Everything the fill reaches is boundary: the border bands, and any rock or
+   * container stack piled against them. Buildings in the interior are not
+   * connected to the edge, so they stay hidden until they are found.
+   */
+  private computeOutline(map: RaidSession['map']): Uint8Array {
+    const w = map.width;
+    const h = map.height;
+    const out = new Uint8Array(w * h);
+    const stack: number[] = [];
+    const push = (x: number, y: number): void => {
+      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      const i = y * w + x;
+      if (out[i] || !map.isSolid(x, y)) return;
+      out[i] = 1;
+      stack.push(i);
+    };
+    for (let x = 0; x < w; x++) {
+      push(x, 0);
+      push(x, h - 1);
+    }
+    for (let y = 0; y < h; y++) {
+      push(0, y);
+      push(w - 1, y);
+    }
+    while (stack.length > 0) {
+      const i = stack.pop()!;
+      const x = i % w;
+      const y = (i - x) / w;
+      push(x - 1, y);
+      push(x + 1, y);
+      push(x, y - 1);
+      push(x, y + 1);
+    }
+    return out;
+  }
+
   constructor(actions: { onClose: () => void }) {
     const shell = screenShell('Sektorkarte', '', () => actions.onClose());
     this.root = shell.root;
@@ -100,6 +155,9 @@ export class MapScreen implements Screen {
   bind(session: RaidSession): void {
     this.session = session;
     this.explored = new Uint8Array(session.map.width * session.map.height);
+    // Dropped rather than resized: two locations can share a size, and a
+    // cached outline from the previous raid would draw the wrong coastline.
+    this.outline = null;
   }
 
   /**
@@ -173,10 +231,24 @@ export class MapScreen implements Screen {
     ctx.fillRect(0, 0, w, h);
 
     // --- terrain -----------------------------------------------------------
+    if (!this.outline || this.outline.length !== map.width * map.height) {
+      this.outline = this.computeOutline(map);
+    }
+    const outline = this.outline;
+
     for (let y = 0; y < map.height; y++) {
       for (let x = 0; x < map.width; x++) {
         const i = y * map.width + x;
-        if (explored[i] === 0) continue;
+        if (explored[i] === 0) {
+          // The boundary is always drawn, so the site has its real outline
+          // from the first second of the raid rather than a rectangle.
+          if (outline[i] === 0) continue;
+          ctx.fillStyle = cssVar('--line');
+          ctx.globalAlpha = 0.5;
+          ctx.fillRect(x * scale, y * scale, scale, scale);
+          ctx.globalAlpha = 1;
+          continue;
+        }
         const tile = map.tiles[i];
         const def = TILE_DEFS[tile];
         let color: string;
@@ -211,6 +283,11 @@ export class MapScreen implements Screen {
 
     for (const zone of map.zones) {
       if (zone.interior) index++;
+      // The outer zone spans the entire location. Washing and stroking it drew
+      // a rectangle around everything, which is exactly the impression the
+      // boundary work exists to remove - so it contributes its ranking to the
+      // legend and nothing to the picture.
+      if (!zone.interior) continue;
       const x = zone.x0 * scale;
       const y = zone.y0 * scale;
       const zw = (zone.x1 - zone.x0 + 1) * scale;

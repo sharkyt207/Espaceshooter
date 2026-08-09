@@ -2789,3 +2789,197 @@ describe('Cover has to be honest', () => {
     );
   });
 });
+
+describe('The edge of the world', () => {
+  /**
+   * Locations used to end with two concrete rectangles stroked around the
+   * outside. It works, and it reads as a fence around a football pitch: a
+   * perfectly straight three-metre wall does not occur in an industrial
+   * landscape, so the boundary announced the edge of the simulation from
+   * anywhere on the map.
+   *
+   * Two properties replaced it, and they pull against each other, which is why
+   * both are pinned here. The world must still be sealed - a player who can
+   * see out of it has seen the whole illusion - and the line they can walk to
+   * must not be a rectangle.
+   */
+
+  const SEEDS = [1, 4242, 7, 99];
+
+  test('the world is sealed on every map and every seed', () => {
+    // This is not hypothetical. The first version varied the band's material
+    // per tile, including at depth zero, and two of the materials it varied
+    // with - rubble at the foot of a cliff, debris against a fence - are
+    // walkable. Ten to nineteen holes per map, on every location and every
+    // seed, each one a place where the player walks up to the edge of the
+    // world and looks out of it.
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const holes: string[] = [];
+        for (let x = 0; x < m.width; x++) {
+          if (!m.isSolid(x, 0)) holes.push(`(${x},0)`);
+          if (!m.isSolid(x, m.height - 1)) holes.push(`(${x},${m.height - 1})`);
+        }
+        for (let y = 0; y < m.height; y++) {
+          if (!m.isSolid(0, y)) holes.push(`(0,${y})`);
+          if (!m.isSolid(m.width - 1, y)) holes.push(`(${m.width - 1},${y})`);
+        }
+        assert.equal(
+          holes.length, 0,
+          `${bp.id} seed ${seed}: ${holes.length} gaps in the outer ring, first at ${holes.slice(0, 4).join(' ')}`,
+        );
+      }
+    }
+  });
+
+  test('and the ground the player can reach is not a rectangle', () => {
+    /**
+     * Measured as the spread of how far in from each edge the first walkable
+     * tile sits. A stroked border gives exactly the same inset everywhere, so
+     * the standard deviation is zero; an organic one varies by several tiles.
+     *
+     * The walk stops at the band's own maximum depth so that a building near
+     * the edge cannot be mistaken for a deep border and inflate the number -
+     * the first version of this measurement reported a spread of eight on a
+     * border that was uniformly two tiles deep, because it had walked straight
+     * through a warehouse.
+     */
+    for (const bp of MAP_BLUEPRINTS) {
+      const cap = Math.max(3, Math.floor(Math.min(bp.width, bp.height) * 0.1)) + 2;
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const depths: number[] = [];
+        const walk = (n: number, solidAt: (i: number, d: number) => boolean): void => {
+          for (let i = 0; i < n; i++) {
+            let d = 0;
+            while (d < cap && solidAt(i, d)) d++;
+            depths.push(d);
+          }
+        };
+        walk(m.width, (x, d) => m.isSolid(x, d));
+        walk(m.width, (x, d) => m.isSolid(x, m.height - 1 - d));
+        walk(m.height, (y, d) => m.isSolid(d, y));
+        walk(m.height, (y, d) => m.isSolid(m.width - 1 - d, y));
+
+        // Measured as the share of the boundary sitting at the *same* inset,
+        // not as a standard deviation. That distinction matters: a stroked
+        // rectangle with the normal scatter of debris near it produces a
+        // spread of well over a tile while remaining a rectangle, because a
+        // handful of crates pull the variance up without moving the line. This
+        // version was checked against a deliberately restored `strokeRect`
+        // border and fails on it, which the standard-deviation form did not.
+        const sorted = [...depths].sort((a, b) => a - b);
+        const median = sorted[sorted.length >> 1];
+        const onTheLine = depths.filter((d) => Math.abs(d - median) <= 1).length / depths.length;
+        // 75 % rather than something tighter because a small location has
+        // less room to wander: the Verladehof is 76 tiles across, its band is
+        // capped at 9, so the boundary can only vary within a few tiles and
+        // sits at 45-64 %. The larger maps come in at 14-39 %, and a stroked
+        // rectangle is essentially 100 %, so the margin is still wide.
+        assert.ok(
+          onTheLine < 0.75,
+          `${bp.id} seed ${seed}: ${(onTheLine * 100).toFixed(0)} % of the boundary sits within a ` +
+            `tile of the same inset (${median}) - that is a rectangle with texture on it`,
+        );
+      }
+    }
+  });
+
+  test('a border made of something is made of more than one thing', () => {
+    // Four edges of identical material meeting at right angles is the same
+    // tell as a stroked rectangle, whatever the material is. The corners are
+    // where it gives itself away, so adjacent edges must differ.
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const materials = new Set<number>();
+        const sample = (x: number, y: number) => materials.add(m.at(x, y));
+        for (let i = 4; i < m.width - 4; i += 3) {
+          sample(i, 0);
+          sample(i, m.height - 1);
+        }
+        for (let i = 4; i < m.height - 4; i += 3) {
+          sample(0, i);
+          sample(m.width - 1, i);
+        }
+        assert.ok(
+          materials.size >= 2,
+          `${bp.id} seed ${seed}: the whole boundary is one material (${[...materials].join(',')})`,
+        );
+      }
+    }
+  });
+});
+
+describe('Buildings are not boxes', () => {
+  test('a good share of structures have a shape other than a rectangle', () => {
+    /**
+     * Every building used to be one stroked rectangle, which is why the maps
+     * read as a box of boxes from the first top-down render. Districts now
+     * carry the shapes they are allowed to take - a warehouse stays a hall
+     * because it needs its floor uninterrupted, an administration block gets
+     * built around a courtyard - so this checks the variety reaches the map
+     * rather than merely existing in the table.
+     *
+     * Counted by walking the roofed area and asking whether its bounding box
+     * is full. A rectangle fills its own bounds; an L, a U and a courtyard
+     * leave a measurable hole.
+     */
+    let rectangular = 0;
+    let shaped = 0;
+
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of [1, 4242, 7]) {
+        const m = generateMap(bp, seed).map;
+        const seen = new Uint8Array(m.width * m.height);
+
+        for (let y = 0; y < m.height; y++) {
+          for (let x = 0; x < m.width; x++) {
+            const i = y * m.width + x;
+            if (seen[i] || m.ceiling[i] === 0) continue;
+
+            // Flood the roofed blob this tile belongs to.
+            const stack = [i];
+            seen[i] = 1;
+            let minX = x, maxX = x, minY = y, maxY = y, area = 0;
+            while (stack.length > 0) {
+              const j = stack.pop()!;
+              const jx = j % m.width;
+              const jy = (j - jx) / m.width;
+              area++;
+              if (jx < minX) minX = jx;
+              if (jx > maxX) maxX = jx;
+              if (jy < minY) minY = jy;
+              if (jy > maxY) maxY = jy;
+              const neighbours = [j - 1, j + 1, j - m.width, j + m.width];
+              for (const n of neighbours) {
+                if (n < 0 || n >= seen.length || seen[n] || m.ceiling[n] === 0) continue;
+                // Do not wrap around the row ends.
+                if ((n === j - 1 && jx === 0) || (n === j + 1 && jx === m.width - 1)) continue;
+                seen[n] = 1;
+                stack.push(n);
+              }
+            }
+
+            // Ignore anything too small to have had a shape chosen for it.
+            const bounds = (maxX - minX + 1) * (maxY - minY + 1);
+            if (bounds < 64) continue;
+            // A rectangle fills its bounds. Allowing 8 % slack covers the tile
+            // or two a doorway punched through an outer wall takes away.
+            if (area >= bounds * 0.92) rectangular++;
+            else shaped++;
+          }
+        }
+      }
+    }
+
+    const total = rectangular + shaped;
+    assert.ok(total >= 40, `only ${total} buildings found across the sector - too few to conclude anything`);
+    assert.ok(
+      shaped / total > 0.25,
+      `only ${shaped} of ${total} structures are anything other than a plain rectangle ` +
+        `(${((shaped / total) * 100).toFixed(0)} %) - the footprint shapes are not reaching the map`,
+    );
+  });
+});
