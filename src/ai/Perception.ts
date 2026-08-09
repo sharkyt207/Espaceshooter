@@ -1,6 +1,6 @@
 import { clamp01, angleDelta, distance } from '../core/Math2D';
 import type { SoundEventPayload } from '../core/GameEvents';
-import { hasLineOfSight } from '../world/Raycast';
+import { hasLineOfSightAt } from '../world/Raycast';
 import type { TileMap } from '../world/TileMap';
 import type { Combatant } from '../combat/Combatant';
 import type { AIProfile } from './AIProfiles';
@@ -59,6 +59,8 @@ export interface PerceptionInput {
   observerAngle: number;
   /** Multiplier from equipment - a closed helmet costs hearing. */
   hearingMultiplier: number;
+  /** Eye height in metres. Drops when the observer crouches. */
+  observerEyeHeight: number;
   /** True while the observer is suppressed; tunnel vision reduces the cone. */
   suppressed: boolean;
   /**
@@ -99,9 +101,16 @@ export function updateVision(
     // Suppression narrows the cone: people under fire stop scanning wide.
     const fov = profile.fovHalfAngle * (input.suppressed ? 0.6 : 1);
     if (Math.abs(angleDelta(input.observerAngle, bearing)) <= fov) {
-      // Line of sight is tested against the target's eye line, so someone
-      // crouched behind a crate is genuinely hidden.
-      detected = hasLineOfSight(map, input.observerX, input.observerY, target.x, target.y);
+      // Line of sight runs eye to eye, in three dimensions, so someone
+      // crouched behind a crate really is hidden - and stays hidden from
+      // exactly the angles from which a round could not reach them either.
+      // The head is the highest thing an observer could catch sight of, so
+      // if the eye line is blocked, nothing of the target is showing.
+      detected = hasLineOfSightAt(
+        map,
+        input.observerX, input.observerY, input.observerEyeHeight,
+        target.x, target.y, target.eyeHeight,
+      );
     }
   }
 

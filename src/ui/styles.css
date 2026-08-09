@@ -1867,3 +1867,84 @@ html, body {
 
 .slider:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--text); outline-offset: 2px; }
 .slider:focus-visible::-moz-range-thumb { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* --- map legend ---------------------------------------------------------
+   The key beside the sector map. Only carries districts too small to label
+   in place, so it stays short enough not to need its own scroll on a phone -
+   and it fills the horizontal space a square map leaves in a wide panel. */
+.map-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  min-width: 120px;
+  max-width: 190px;
+  scrollbar-width: none;
+}
+.map-legend::-webkit-scrollbar { display: none; }
+
+.map-legend-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg-2);
+}
+.map-legend-row .n {
+  flex: 0 0 auto;
+  min-width: 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.map-legend-row .label { min-width: 0; }
+.map-legend-row .name {
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.map-legend-row .risk { font-size: 9px; line-height: 1.2; }
+
+/* Below this there is no room beside the map at all; the numbers on the map
+   still identify the districts, and the header still names the one you are
+   standing in. */
+@media (max-height: 400px) {
+  .map-legend { display: none !important; }
+}
+
+/* --- touch targets larger than the graphic -------------------------------
+   Measured before changing anything: six pixels outside the fire button's
+   edge hit nothing at all. The interactive area was exactly the drawn circle,
+   so a thumb landing slightly off simply did not fire - which is the "I have
+   to press twice" complaint.
+
+   A thumb contact patch is roughly 9 mm; at typical phone density that is 30
+   to 40 px, and the finger's reported point is not its centre. The graphic
+   stays the size it is, and an invisible ring extends the target beyond it.
+
+   `::before` rather than padding because these are absolutely positioned
+   circles whose size is written by the layout config - growing the box would
+   move the graphic. */
+.touch-btn::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 50%;
+  /* Nothing to see; this exists purely to be hit. */
+}
+
+/* The corner strip (INV / KARTE / MENÜ) is rectangular and sits against the
+   screen edge, so it grows inwards only - a ring there would reach off-screen
+   on one side and overlap its neighbour on the other. */
+.touch-corner .touch-btn::before {
+  inset: -8px -4px;
+  border-radius: var(--radius);
+}

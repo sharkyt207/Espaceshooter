@@ -187,13 +187,27 @@ export class InputSystem {
 
       const rect = surface.getBoundingClientRect();
       const localX = e.clientX - rect.left;
-      const inMoveZone = localX < rect.width * this.config.moveZoneWidth;
+      const localY = e.clientY - rect.top;
 
-      if (inMoveZone) {
-        // One stick at a time: a second thumb in the same zone would make the
-        // intended direction ambiguous. A second finger there is ignored for
-        // movement but still consumes nothing, so it cannot block anything.
-        if (this.movePointer) return;
+      // The stick zone is a corner, not a column.
+      //
+      // It used to be the full-height left 42 %, and that column swallowed
+      // every camera swipe that began inside it: measured, a swipe there moved
+      // the camera by exactly zero while the identical swipe on the right moved
+      // 0.35 rad. Nearly half the screen could not look, including the strip
+      // over the vitals panel. That is the "I swipe and nothing happens" report.
+      //
+      // Bounding it vertically costs nothing real - a thumb rests low - and
+      // hands the upper left back to the camera.
+      const inMoveZone =
+        localX < rect.width * this.config.moveZoneWidth &&
+        localY > rect.height * (1 - this.config.moveZoneHeight);
+
+      // A second finger is never a second stick. It used to be discarded
+      // outright, so putting a finger down in the left zone while already
+      // moving did nothing at all - the single most reproducible way to lose an
+      // input. Now it looks, which is what a player reaching across intends.
+      if (inMoveZone && !this.movePointer) {
         this.roles.set(e.pointerId, 'move');
         this.movePointer = {
           id: e.pointerId,

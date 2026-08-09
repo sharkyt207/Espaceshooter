@@ -7,7 +7,8 @@ import { Pool } from '../src/core/Pool';
 import { angleDelta, clamp, damp, pointSegmentDistSq, wrapAngle } from '../src/core/Math2D';
 import { EventBus } from '../src/core/EventBus';
 import { Tile, TileMap } from '../src/world/TileMap';
-import { hasLineOfSight, walkSegment } from '../src/world/Raycast';
+import { hasLineOfSight, hasLineOfSightAt, walkSegment } from '../src/world/Raycast';
+import { blueprintById } from '../src/data/MapData';
 import { circleFits, moveCircle } from '../src/world/Physics';
 import { CoverMap, NavGrid } from '../src/world/NavGrid';
 import { generateMap } from '../src/world/MapGenerator';
@@ -39,6 +40,7 @@ import { LootSystem } from '../src/loot/LootSystem';
 import { LOOT_TABLES } from '../src/loot/LootTables';
 import { Progression } from '../src/meta/Progression';
 import { Profile } from '../src/meta/Profile';
+import { RaidSession } from '../src/raid/RaidSession';
 import { Hideout } from '../src/meta/Hideout';
 import { QuestSystem } from '../src/meta/Quests';
 import { TraderSystem } from '../src/meta/Traders';
@@ -1010,6 +1012,7 @@ describe('Perception', () => {
     observerX: 4,
     observerY: 32,
     observerAngle: 0,
+    observerEyeHeight: 1.6,
     hearingMultiplier: 1,
     suppressed: false,
     sightScale,
@@ -1107,9 +1110,86 @@ describe('WorldMesh', () => {
     // neighbours' floors share with it.
     assert.ok(aoAt.get('6,6')! < 0.95, 'the floor corner against the block should be darkened');
     assert.ok(aoAt.get('7,7')! < 0.95, 'and so should the opposite one');
-    // Well clear of it, nothing occludes anything.
-    assert.equal(aoAt.get('2,2'), 1, 'open floor should be fully lit');
-    assert.equal(aoAt.get('10,3'), 1, 'and so should floor on the other side');
+
+    // Everything else is fully lit.
+    //
+    // Written as "no vertex away from the block is shaded" rather than as a
+    // lookup at two chosen grid points, because open floor is merged into runs
+    // now and a run has vertices only at its ends - so a point-lookup version
+    // of this assertion goes looking for a vertex that no longer exists and
+    // fails on a mesh that is pixel-identical. This form says the same thing
+    // about the picture without depending on how the picture is cut up.
+    for (const [key, ao] of aoAt) {
+      const [gx, gy] = key.split(',').map(Number);
+      // The grid points on the block's own footprint are the shaded ones.
+      if (gx >= 6 && gx <= 7 && gy >= 6 && gy <= 7) continue;
+      // So is the map boundary: out of bounds answers solid to every query, by
+      // design, so the edge of the world casts a contact shadow like any other
+      // wall. Not what this test is about.
+      if (gx === 0 || gy === 0 || gx === 12 || gy === 12) continue;
+      assert.equal(ao, 1, `open floor at ${key} should be fully lit, was ${ao}`);
+    }
+  });
+
+  test('a merged run repeats its texture once per tile', () => {
+    // The other way merging goes wrong, and the one that leaves no trace in
+    // any count: a run of eight tiles drawn with a 0..1 texture span stretches
+    // a single copy of the image over sixteen metres of ground. The mesh is
+    // the right size, the floor has no holes, and the world looks like it was
+    // painted with a mop. Only the UVs say so.
+    const map = blockMap();
+    const mesh = buildWorldMesh(map);
+    const uAt = (i: number) => mesh.opaque[i * FLOATS_PER_VERTEX + 3];
+
+    let merged = 0;
+    for (let i = 0; i < mesh.opaqueCount; i += 6) {
+      const a = vertexAt(mesh.opaque, i);
+      const b = vertexAt(mesh.opaque, i + 1);
+      if (a.axis !== AXIS_UP || a.z !== 0) continue;
+      const span = Math.abs(b.x - a.x);
+      if (span > 1) merged++;
+      assert.equal(
+        Math.abs(uAt(i + 1) - uAt(i)), span,
+        `a floor quad spanning ${span} tiles carries ${Math.abs(uAt(i + 1) - uAt(i))} ` +
+          'texture repeats - the ground will be smeared across it',
+      );
+    }
+    assert.ok(merged > 0, 'no floor runs were merged at all, so this proves nothing');
+  });
+
+  test('and merging the floor into runs does not leave holes in it', () => {
+    // Runs of open floor collapse into single quads, which halved the mesh.
+    // The failure mode that buys is a gap: a tile the merge skipped, or a run
+    // that stops one short, leaves a hole the player looks through into the
+    // void. Nothing else in the suite would notice - the vertex count would
+    // simply be a little lower.
+    const map = blockMap();
+    const mesh = buildWorldMesh(map);
+
+    const covered = new Uint8Array(map.width * map.height);
+    for (let i = 0; i < mesh.opaqueCount; i += 6) {
+      const a = vertexAt(mesh.opaque, i);
+      const c = vertexAt(mesh.opaque, i + 2);
+      if (a.axis !== AXIS_UP || a.z !== 0) continue;
+      // Quads are axis-aligned, so the first and third corners bound them.
+      for (let y = Math.min(a.y, c.y); y < Math.max(a.y, c.y); y++) {
+        for (let x = Math.min(a.x, c.x); x < Math.max(a.x, c.x); x++) {
+          covered[y * map.width + x] += 1;
+        }
+      }
+    }
+
+    for (let y = 0; y < map.height; y++) {
+      for (let x = 0; x < map.width; x++) {
+        const i = y * map.width + x;
+        const isFloor = map.tiles[i] === Tile.Floor;
+        assert.equal(
+          covered[i], isFloor ? 1 : 0,
+          `tile ${x},${y} is ${isFloor ? 'floor' : 'wall'} but is covered by ` +
+            `${covered[i]} floor quads`,
+        );
+      }
+    }
   });
 
   test('a wall is darkest where it meets the ground', () => {
@@ -1238,13 +1318,30 @@ describe('Locations feel different', () => {
       return roofed / Math.max(1, floor);
     };
 
-    // The Klaerwerk is fought indoors: roughly a third of its walkable floor
-    // is under a roof, against about a seventh at the harbour and depot.
+    // The Klaerwerk is the one fought indoors, and it has to lead *every*
+    // other location on that measure - not merely beat one of them.
+    //
+    // This was written as "1.8x the harbour" when the harbour was 14 % roofed.
+    // Then every map grew and gained interiors, the harbour reached 23 %, and
+    // the ratio stopped holding while the Klaerwerk was still clearly the most
+    // interior place in the game. A threshold pinned to another map's absolute
+    // value ages badly; "strictly ahead of all of them, by a margin worth
+    // feeling" says the intended thing and cannot be satisfied by accident.
+    //
+    // The generator's ceiling here is about 36 %: past roughly two dozen
+    // buildings the placer runs out of room and further ones simply fail, so
+    // squeezing the plot smaller buys interior share by losing districts. 30 %
+    // at fifteen districts is the better trade.
     const filter = indoorShare('filter');
+    const others = MAP_BLUEPRINTS
+      .filter((b) => b.id !== 'filter')
+      .map((b) => ({ id: b.id, share: indoorShare(b.id) }));
+    const runnerUp = others.reduce((a, b) => (b.share > a.share ? b : a));
     assert.ok(
-      filter > indoorShare('harbour') * 1.8 && filter > indoorShare('depot') * 1.8,
-      `the Klaerwerk should be substantially more interior than the open ` +
-        `locations (${(filter * 100).toFixed(0)} % roofed)`,
+      filter > runnerUp.share * 1.15,
+      `the Klaerwerk should be the most interior location by a clear margin - ` +
+        `it is ${(filter * 100).toFixed(0)} % roofed against ${runnerUp.id} at ` +
+        `${(runnerUp.share * 100).toFixed(0)} %`,
     );
     // And dark enough that the torch stops being optional.
     const filterBp = MAP_BLUEPRINTS.find((b) => b.id === 'filter')!;
@@ -1266,10 +1363,19 @@ describe('Locations feel different', () => {
       `the Verladehof should be far denser than the harbour ` +
         `(${(density('yard') * 1000).toFixed(1)} vs ${(density('harbour') * 1000).toFixed(1)} per 1000 tiles)`,
     );
+    // The clock is half the pressure, so it has to stay the shortest by a
+    // wide margin rather than merely be short. Pinned relatively, because an
+    // absolute bound broke the moment every location's clock grew with its
+    // area - the Verladehof went from 8 to 10 minutes and the assertion
+    // failed while the map had become *more* distinct, not less.
     const yardBp = MAP_BLUEPRINTS.find((b) => b.id === 'yard')!;
+    const shortestOther = Math.min(
+      ...MAP_BLUEPRINTS.filter((b) => b.id !== 'yard').map((b) => b.raidSeconds),
+    );
     assert.ok(
-      yardBp.raidSeconds <= 8 * 60,
-      `the Verladehof's clock has to be the pressure (${yardBp.raidSeconds / 60} min)`,
+      yardBp.raidSeconds <= shortestOther * 0.6,
+      `the Verladehof's clock has to be the pressure - ${yardBp.raidSeconds / 60} min ` +
+        `against ${shortestOther / 60} min for the next shortest`,
     );
   });
 
@@ -2125,6 +2231,199 @@ describe('Risk and reward', () => {
   });
 });
 
+describe('The extraction loop', () => {
+  /**
+   * The one thing this genre is named after, and the one path nothing tested.
+   *
+   * Extraction points were checked for existing and for being reachable, and
+   * the browser walkthrough *abandons* the raid rather than leaving through
+   * one. So the sequence the whole game is built around - pick something up,
+   * carry it to an exit, hold the exit, keep what you carried - had never been
+   * run end to end. Every part of it existed; nothing asserted they were
+   * joined.
+   */
+
+  const stubAudio = () => ({
+    listener: { x: 0, y: 0, angle: 0, hearingFactor: 1, deafness: 0 },
+    setAmbience: () => {},
+    stopAmbience: () => {},
+    playThunder: () => {},
+    play: () => {},
+    applyMuzzleDeafness: () => {},
+    update: () => {},
+  });
+
+  /**
+   * A raid on the smallest, densest map.
+   *
+   * `invulnerable` defaults on, and the first run of these tests is the reason:
+   * standing still in an exit for the hold duration on the Verladehof, with
+   * twenty hostiles and no return fire, got the player killed - "Gefallen:
+   * Brustdurchschuss". That is the map working exactly as designed, and it is
+   * not what these tests are asking about. They ask whether holding an exit
+   * extracts you and whether what you carried survives the trip; whether you
+   * can survive the Verladehof standing still is a different question with a
+   * known answer.
+   *
+   * The death test below turns it off and kills the player outright, so the
+   * losing branch is still covered.
+   */
+  const deploy = (seed = 11, invulnerable = true) => {
+    const bus = new EventBus<Record<string, never>>() as never;
+    const profile = new Profile(bus, seed);
+    const blueprint = MAP_BLUEPRINTS.find((b) => b.id === 'yard')!;
+    const session = new RaidSession(
+      bus, profile, stubAudio() as never, blueprint, seed,
+    );
+    if (invulnerable) {
+      (session.player.health as unknown as { applyDamage: () => void }).applyDamage = () => {};
+    }
+    return { bus, profile, session };
+  };
+
+  /**
+   * Stand in an exit until it lets you out.
+   *
+   * Teleporting rather than pathing: this is a test of the extraction rule,
+   * not of navigation, and walking there would make it a test of both.
+   */
+  const holdExtract = (session: RaidSession, extract: { x: number; y: number }): void => {
+    for (let i = 0; i < 60 * 40 && session.phase !== 'ended'; i++) {
+      session.player.x = extract.x;
+      session.player.y = extract.y;
+      session.update(1 / 60);
+    }
+  };
+
+  const freeExtract = (session: RaidSession) =>
+    session.generated.extracts.find((e) => !e.condition || e.condition.kind === 'always')!;
+
+  test('standing in an exit long enough ends the raid alive', () => {
+    const { session } = deploy();
+    const exit = freeExtract(session);
+    assert.ok(exit, 'the map has to offer at least one unconditional exit');
+
+    holdExtract(session, exit);
+
+    const result = session.raidResult;
+    assert.ok(result, 'holding an extraction should have produced a result');
+    assert.equal(result.survived, true, `expected to survive, got: ${result.reason}`);
+    assert.equal(result.extractName, exit.name);
+    // Specific enough to be about *extraction*. `> 0` was not: hostiles kill
+    // each other during the hold, and a single kill satisfied it, so the
+    // assertion survived deleting the extraction bonus entirely. The bonus is
+    // 600 x the conditions multiplier; the cheapest kill is 120.
+    assert.ok(
+      result.xpEarned >= 500,
+      `extracting should pay its own bonus, not just whatever happened during ` +
+        `the hold (earned ${result.xpEarned})`,
+    );
+  });
+
+  test('leaving the zone cancels the hold - no partial credit', () => {
+    const { session } = deploy();
+    const exit = freeExtract(session);
+    const spawn = session.generated.playerSpawns[0];
+
+    const frames = (n: number, x: number, y: number) => {
+      for (let i = 0; i < n && session.phase !== 'ended'; i++) {
+        session.player.x = x;
+        session.player.y = y;
+        session.update(1 / 60);
+      }
+    };
+
+    // Almost all the way through the hold.
+    const almost = Math.max(1, Math.round(exit.holdSeconds * 60) - 20);
+    frames(almost, exit.x, exit.y);
+    assert.equal(session.phase, 'extracting', 'should be mid-hold at this point');
+
+    // Step out, then come back.
+    frames(120, spawn.x, spawn.y);
+    assert.notEqual(session.phase, 'ended', 'walking away must not extract you');
+
+    // The discriminating part. If progress had merely paused, those last few
+    // frames would finish it; the rule is that it resets, so they must not.
+    //
+    // My first version of this test only asserted that stepping away did not
+    // end the raid - which is true whether progress resets or freezes, because
+    // completing requires standing inside either way. It passed against a
+    // deliberately broken reset, and measured nothing.
+    frames(25, exit.x, exit.y);
+    assert.notEqual(
+      session.phase, 'ended',
+      'returning to the exit must start the hold again, not resume it',
+    );
+
+    // And a full hold from that point does work, so this is a reset rather
+    // than the exit having become unusable.
+    frames(Math.round(exit.holdSeconds * 60) + 30, exit.x, exit.y);
+    assert.equal(session.phase, 'ended', 'a complete hold should still extract');
+    assert.equal(session.raidResult?.survived, true);
+  });
+
+  test('what you carry out reaches the stash', () => {
+    // The end of the chain, and the part with the most places to go wrong:
+    // raid inventory -> profile loadout -> stash, across two systems and a
+    // screen transition.
+    const { profile, session } = deploy();
+    const before = profile.stash.items().length;
+
+    const prize = createStack('ammo_545_bp', 30);
+    assert.ok(session.player.inventory.store(prize), 'the player should have room for it');
+
+    holdExtract(session, freeExtract(session));
+    assert.equal(session.raidResult?.survived, true);
+    assert.ok(session.raidResult.lootValue > 0, 'carried goods should be valued');
+
+    // The two steps the game shell performs after a raid.
+    session.commitToProfile();
+    const { overflow } = profile.depositLoadout();
+    assert.equal(overflow, 0, 'a nearly empty stash should have room');
+
+    // Ammunition deliberately stays on the rig rather than going to the stash,
+    // so the round trip is checked on the loadout for this one.
+    const inLoadout = profile.loadout
+      .allGrids()
+      .some(({ grid }) => grid.items().some((s) => s.defId === 'ammo_545_bp'));
+    assert.ok(inLoadout, 'the ammunition carried out should still be on the rig');
+    assert.ok(
+      profile.stash.items().length >= before,
+      'extracting must never shrink the stash',
+    );
+  });
+
+  test('dying leaves everything behind except the secure container', () => {
+    // The other half of risk and reward. If death does not cost the loadout,
+    // nothing about extracting is a decision.
+    const { profile, session } = deploy(11, false);
+
+    const loose = createStack('ammo_545_bp', 30);
+    session.player.inventory.store(loose);
+    const carriedBefore = session.player.inventory
+      .allGrids()
+      .reduce((n, { grid }) => n + grid.items().length, 0);
+    assert.ok(carriedBefore > 0, 'the player should be carrying something to lose');
+
+    session.player.health.kill('Test');
+    for (let i = 0; i < 240 && session.phase !== 'ended'; i++) session.update(1 / 60);
+
+    const result = session.raidResult;
+    assert.ok(result, 'dying should produce a result');
+    assert.equal(result.survived, false);
+    assert.ok(result.lostValue > 0, 'dying should be recorded as a loss');
+
+    session.commitToProfile();
+    const carriedAfter = profile.loadout
+      .allGrids()
+      .reduce((n, { grid }) => n + grid.items().length, 0);
+    assert.ok(
+      carriedAfter < carriedBefore,
+      `death should strip the loadout (${carriedBefore} -> ${carriedAfter})`,
+    );
+  });
+});
+
 describe('AI behaviour', () => {
   /**
    * Does the AI actually fight, or does it walk at you in a straight line?
@@ -2285,5 +2584,662 @@ describe('AI behaviour', () => {
     }
 
     assert.equal(enemy.state, 'flee', `a badly wounded scavenger should break off, was ${enemy.state}`);
+  });
+});
+
+describe('Cover has to be honest', () => {
+  /**
+   * The complaint this block exists for was "I get shot by enemies I cannot
+   * see". It turned out to be two separate defects that produced the same
+   * feeling, and both are measured here rather than described.
+   *
+   * The first was ordering. A step of the projectile integrator is not short -
+   * a rifle round covers about 360 tiles a second, which is six tiles at 60 Hz
+   * and twelve at 30 - and every actor along the whole step used to be resolved
+   * before a single wall was looked at. So a round was credited with a hit on
+   * someone three tiles behind concrete whenever the wall and the target
+   * happened to land in the same step. Whether that happened depended on
+   * nothing but the phase of the integration against the wall's position, which
+   * is exactly why being shot through cover felt arbitrary instead of unfair.
+   *
+   * The second was that sight and ballistics disagreed about what an obstacle
+   * is. Rounds were tested in three dimensions against tile height; vision was
+   * a flat "is any tile between us opaque". A crate is not opaque, because you
+   * can see over it - so an enemy could watch a prone player through a solid
+   * wooden box that its own rounds could not pass.
+   */
+
+  const bus = new EventBus<Record<string, never>>() as never;
+
+  /** A corridor with one full-height wall of `tile` across it at x = 20. */
+  const corridor = (tile: Tile | null): TileMap => {
+    const map = new TileMap(40, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 40; x++) map.set(x, y, Tile.Floor);
+    if (tile !== null) for (let y = 0; y < 8; y++) map.set(20, y, tile);
+    return map;
+  };
+
+  interface ShotResult {
+    /** Damage the target took, in hit points. */
+    damage: number;
+    /** True when the round's passage suppressed the target. */
+    suppressed: boolean;
+  }
+
+  /**
+   * Fire one round down the corridor at a target `beyond` tiles past the wall
+   * and report what reached them.
+   *
+   * The muzzle sits at 1.5 m and the shot is flat, which is the case that
+   * matters: it clears a 1.2 m crate and is stopped by anything full height.
+   */
+  const shoot = (map: TileMap, ammoId: string, dt: number, targetX: number): ShotResult => {
+    const health = new HealthSystem(bus, true);
+    let suppressed = false;
+    const target = {
+      id: 2, isPlayer: true, name: 'Ziel',
+      x: targetX, y: 4.5, angle: 0, pitch: 0,
+      radius: 0.28, height: 1.8, eyeHeight: 1.62,
+      get alive(): boolean { return !health.dead; },
+      health, inventory: new Inventory(),
+      onNearMiss: () => { suppressed = true; },
+    } as unknown as Combatant;
+
+    const ballistics = new BallisticsSystem(bus, new EffectSystem(64, 64), 5);
+    ballistics.fire({
+      originX: 2.5, originY: 4.5, originZ: 1.5, dirX: 1, dirY: 0, pitch: 0,
+      ammoDefId: ammoId, ownerId: 1, ownerIsPlayer: false, spreadRad: 0, velocityBonus: 0,
+    });
+
+    const before = health.totalHp;
+    for (let i = 0; i < 400 && ballistics.activeCount > 0; i++) {
+      ballistics.update(dt, map, (x, y, r, out) => {
+        out.length = 0;
+        if (Math.hypot(target.x - x, target.y - y) <= r + target.radius) out.push(target.id);
+      }, (id) => (id === target.id ? target : undefined));
+    }
+    return { damage: before - health.totalHp, suppressed };
+  };
+
+  test('no round reaches a target behind concrete, at any frame rate', () => {
+    // Both rates matter and for different reasons: 60 Hz is what a good phone
+    // runs, 30 Hz is what a cheap one settles at, and the old defect appeared
+    // at both but at different distances. The distances are swept because a
+    // single wall position only samples one phase of the integration - the
+    // version of this test that checked one distance passed against the broken
+    // code, which is how the bug survived this long.
+    for (const ammo of ['ammo_545_bp', 'ammo_762n_ap', 'ammo_9_ap', 'ammo_12_buck']) {
+      for (const dt of [1 / 60, 1 / 30]) {
+        for (let wallGap = 1; wallGap <= 6; wallGap++) {
+          const map = corridor(Tile.Concrete);
+          const r = shoot(map, ammo, dt, 20.5 + wallGap);
+          assert.equal(
+            r.damage, 0,
+            `${ammo} at 1/${Math.round(1 / dt)} s went through concrete to a target ` +
+              `${wallGap} tiles behind it (${r.damage.toFixed(1)} damage)`,
+          );
+          assert.equal(
+            r.suppressed, false,
+            `${ammo} at 1/${Math.round(1 / dt)} s suppressed a target ${wallGap} tiles ` +
+              'behind concrete - a round stopped by a wall never got near anyone',
+          );
+        }
+      }
+    }
+  });
+
+  test('but cover is not a force field: height and material still decide', () => {
+    // Without this the test above is satisfied by making every round harmless,
+    // which is a far easier way to pass it than fixing the ordering.
+    const dt = 1 / 60;
+    const open = shoot(corridor(null), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(open > 20, `an unobstructed round should hurt, dealt ${open.toFixed(1)}`);
+
+    // A crate is 1.2 m; a flat shot from a 1.5 m muzzle passes over it. Cover
+    // you are standing up behind is not cover.
+    const overCrate = shoot(corridor(Tile.Crate), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(
+      Math.abs(overCrate - open) < 0.01,
+      `a flat shot should sail over a 1.2 m crate, dealt ${overCrate.toFixed(1)} vs ${open.toFixed(1)}`,
+    );
+
+    // A wooden wall is full height but soft: the round arrives, weakened.
+    const throughWood = shoot(corridor(Tile.Wood), 'ammo_545_bp', dt, 23.5).damage;
+    assert.ok(
+      throughWood > 0 && throughWood < open * 0.85,
+      `a 5.45 penetrator should punch through wood and arrive weaker, ` +
+        `dealt ${throughWood.toFixed(1)} vs ${open.toFixed(1)} in the open`,
+    );
+
+    // Ordering cuts both ways. A wall the round would have hit *after* the
+    // target must not touch it: standing with your back to concrete does not
+    // make you harder to kill.
+    const backToWall = shoot(corridor(Tile.Concrete), 'ammo_545_bp', dt, 19.4).damage;
+    assert.ok(
+      Math.abs(backToWall - open) < 0.01,
+      `a target in front of the wall should take the full round, dealt ` +
+        `${backToWall.toFixed(1)} vs ${open.toFixed(1)} in the open - the barrier behind ` +
+        'them is bleeding energy off a round that never reached it',
+    );
+  });
+
+  test('what an enemy can see is what an enemy could hit', () => {
+    /**
+     * The invariant, stated as the player experiences it: if an enemy has your
+     * eye line, a round down that same line can arrive. Any pair where sight is
+     * clear and the shot is not is a position where you are seen and shot at
+     * from somewhere you have no way to answer.
+     *
+     * Measured on real generated maps rather than a hand-built arena, because
+     * the disagreement came from the shapes the generator actually produces -
+     * crate rows and low walls - and an arena would have been built from
+     * whichever tiles I already had in mind.
+     */
+    const stances = [
+      { name: 'stehend', eye: 1.62 },
+      { name: 'geduckt', eye: 1.05 },
+      { name: 'liegend', eye: 0.45 },
+    ];
+    const OBSERVER_EYE = 1.6;
+
+    /** Geometry only: can a round travelling this line reach the far end? */
+    const shotArrives = (
+      map: TileMap, ax: number, ay: number, az: number, bx: number, by: number, bz: number,
+    ): boolean => {
+      const segLen = Math.hypot(bx - ax, by - ay);
+      let clear = true;
+      walkSegment(ax, ay, bx, by, (tx, ty, dist) => {
+        if (!map.isWall(tx, ty)) return true;
+        const z = az + (bz - az) * (segLen > 0 ? dist / segLen : 0);
+        if (z > map.heightOf(tx, ty)) return true;         // over the top
+        if (map.penetrationOf(tx, ty) < 8) return true;    // glass, wire mesh
+        clear = false;
+        return false;
+      });
+      return clear;
+    };
+
+    for (const id of ['works', 'yard']) {
+      const map = generateMap(blueprintById(id), 4242).map;
+      const open: Array<{ x: number; y: number }> = [];
+      for (let y = 1; y < map.height - 1; y++) {
+        for (let x = 1; x < map.width - 1; x++) if (!map.isSolid(x, y)) open.push({ x, y });
+      }
+
+      for (const stance of stances) {
+        const rng = new Rng(4242);
+        let pairs = 0;
+        let visible = 0;
+        let unanswerable = 0;
+        while (pairs < 6000) {
+          const a = open[rng.int(0, open.length - 1)];
+          const b = open[rng.int(0, open.length - 1)];
+          const ax = a.x + 0.5, ay = a.y + 0.5, bx = b.x + 0.5, by = b.y + 0.5;
+          const d = Math.hypot(bx - ax, by - ay);
+          if (d < 2 || d > 30) continue;
+          pairs++;
+          if (!hasLineOfSightAt(map, ax, ay, OBSERVER_EYE, bx, by, stance.eye)) continue;
+          visible++;
+          if (!shotArrives(map, ax, ay, OBSERVER_EYE, bx, by, stance.eye)) unanswerable++;
+        }
+
+        assert.ok(visible > 200, `${id}/${stance.name}: only ${visible} visible pairs, too few to mean anything`);
+        assert.equal(
+          unanswerable, 0,
+          `${id}/${stance.name}: ${unanswerable} of ${visible} visible pairs are positions where ` +
+            'an enemy sees you through something its own rounds cannot pass',
+        );
+      }
+    }
+  });
+
+  test('going prone behind a crate actually hides you', () => {
+    // The flat test cannot tell a crate from a chain-link fence, so this is the
+    // case that pins the difference down. Standing, your head shows over the
+    // box; lying down, it does not - and a wire fence hides nobody either way.
+    const map = new TileMap(24, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 24; x++) map.set(x, y, Tile.Floor);
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Crate);
+
+    const see = (eye: number): boolean => hasLineOfSightAt(map, 4.5, 4.5, 1.6, 18.5, 4.5, eye);
+    assert.equal(see(1.62), true, 'a standing head shows over a 1.2 m crate');
+    assert.equal(see(0.45), false, 'someone lying down behind a 1.2 m crate is not visible');
+
+    // The flat predicate cannot express any of that, which is the bug.
+    assert.equal(
+      hasLineOfSight(map, 4.5, 4.5, 18.5, 4.5), true,
+      'the flat test sees straight through the crate at every height - kept as a ' +
+        'reminder of why the height-aware one exists',
+    );
+
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Fence);
+    assert.equal(see(0.45), true, 'chain-link is see-through at any height');
+
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Concrete);
+    assert.equal(see(1.62), false, 'concrete blocks the view of a standing target');
+  });
+
+  test('and the AI actually uses that, rather than merely having it available', () => {
+    /**
+     * The test above proves the predicate is correct. This one proves the AI
+     * calls it - which is a different claim, and the one that has been wrong
+     * here more often. Aim assist, the particle budget, the doors and the AI's
+     * own pathfinding were each fully written and connected to nothing; every
+     * check that read the code passed, and every check that measured behaviour
+     * would have failed. So: drive `updateVision` itself and watch what an
+     * observer concludes about a man lying behind a crate.
+     */
+    const map = new TileMap(24, 8);
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 24; x++) map.set(x, y, Tile.Floor);
+    for (let y = 0; y < 8; y++) map.set(12, y, Tile.Crate);
+    // Full daylight, so nothing but geometry can explain a failure to see.
+    map.lightmap.fill(255);
+
+    const observer: PerceptionInput = {
+      observerX: 4.5, observerY: 4.5, observerAngle: 0, observerEyeHeight: 1.6,
+      hearingMultiplier: 1, suppressed: false, sightScale: 1,
+    };
+    const targetAt = (eyeHeight: number, height: number): Combatant => ({
+      id: 1, x: 18.5, y: 4.5, radius: 0.3, height, eyeHeight, angle: 0,
+      health: null as never, inventory: null as never,
+      isPlayer: true, name: 'Ziel', alive: true,
+    });
+
+    const watch = (target: Combatant, stance: number): boolean => {
+      const awareness = createAwareness();
+      const profile = AI_PROFILES.guard;
+      // Three seconds of looking straight at them is far past any acquire time.
+      for (let i = 0; i < 90; i++) {
+        updateVision(awareness, profile, observer, target, map, 1 / 30, 0, stance, 0);
+      }
+      return awareness.visible;
+    };
+
+    assert.equal(
+      watch(targetAt(1.62, 1.8), 2), true,
+      'a standing man is visible over a 1.2 m crate - if this fails the test below proves nothing',
+    );
+    assert.equal(
+      watch(targetAt(0.45, 0.6), 0), false,
+      'a man lying behind a 1.2 m crate is still being seen: the perception path is ' +
+        'not using the height-aware line of sight',
+    );
+  });
+});
+
+describe('The edge of the world', () => {
+  /**
+   * Locations used to end with two concrete rectangles stroked around the
+   * outside. It works, and it reads as a fence around a football pitch: a
+   * perfectly straight three-metre wall does not occur in an industrial
+   * landscape, so the boundary announced the edge of the simulation from
+   * anywhere on the map.
+   *
+   * Two properties replaced it, and they pull against each other, which is why
+   * both are pinned here. The world must still be sealed - a player who can
+   * see out of it has seen the whole illusion - and the line they can walk to
+   * must not be a rectangle.
+   */
+
+  const SEEDS = [1, 4242, 7, 99];
+
+  test('the world is sealed on every map and every seed', () => {
+    // This is not hypothetical. The first version varied the band's material
+    // per tile, including at depth zero, and two of the materials it varied
+    // with - rubble at the foot of a cliff, debris against a fence - are
+    // walkable. Ten to nineteen holes per map, on every location and every
+    // seed, each one a place where the player walks up to the edge of the
+    // world and looks out of it.
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const holes: string[] = [];
+        for (let x = 0; x < m.width; x++) {
+          if (!m.isSolid(x, 0)) holes.push(`(${x},0)`);
+          if (!m.isSolid(x, m.height - 1)) holes.push(`(${x},${m.height - 1})`);
+        }
+        for (let y = 0; y < m.height; y++) {
+          if (!m.isSolid(0, y)) holes.push(`(0,${y})`);
+          if (!m.isSolid(m.width - 1, y)) holes.push(`(${m.width - 1},${y})`);
+        }
+        assert.equal(
+          holes.length, 0,
+          `${bp.id} seed ${seed}: ${holes.length} gaps in the outer ring, first at ${holes.slice(0, 4).join(' ')}`,
+        );
+      }
+    }
+  });
+
+  test('and the ground the player can reach is not a rectangle', () => {
+    /**
+     * Measured as the spread of how far in from each edge the first walkable
+     * tile sits. A stroked border gives exactly the same inset everywhere, so
+     * the standard deviation is zero; an organic one varies by several tiles.
+     *
+     * The walk stops at the band's own maximum depth so that a building near
+     * the edge cannot be mistaken for a deep border and inflate the number -
+     * the first version of this measurement reported a spread of eight on a
+     * border that was uniformly two tiles deep, because it had walked straight
+     * through a warehouse.
+     */
+    for (const bp of MAP_BLUEPRINTS) {
+      const cap = Math.max(3, Math.floor(Math.min(bp.width, bp.height) * 0.1)) + 2;
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const depths: number[] = [];
+        const walk = (n: number, solidAt: (i: number, d: number) => boolean): void => {
+          for (let i = 0; i < n; i++) {
+            let d = 0;
+            while (d < cap && solidAt(i, d)) d++;
+            depths.push(d);
+          }
+        };
+        walk(m.width, (x, d) => m.isSolid(x, d));
+        walk(m.width, (x, d) => m.isSolid(x, m.height - 1 - d));
+        walk(m.height, (y, d) => m.isSolid(d, y));
+        walk(m.height, (y, d) => m.isSolid(m.width - 1 - d, y));
+
+        // Measured as the share of the boundary sitting at the *same* inset,
+        // not as a standard deviation. That distinction matters: a stroked
+        // rectangle with the normal scatter of debris near it produces a
+        // spread of well over a tile while remaining a rectangle, because a
+        // handful of crates pull the variance up without moving the line. This
+        // version was checked against a deliberately restored `strokeRect`
+        // border and fails on it, which the standard-deviation form did not.
+        const sorted = [...depths].sort((a, b) => a - b);
+        const median = sorted[sorted.length >> 1];
+        const onTheLine = depths.filter((d) => Math.abs(d - median) <= 1).length / depths.length;
+        // 75 % rather than something tighter because a small location has
+        // less room to wander: the Verladehof is 76 tiles across, its band is
+        // capped at 9, so the boundary can only vary within a few tiles and
+        // sits at 45-64 %. The larger maps come in at 14-39 %, and a stroked
+        // rectangle is essentially 100 %, so the margin is still wide.
+        assert.ok(
+          onTheLine < 0.75,
+          `${bp.id} seed ${seed}: ${(onTheLine * 100).toFixed(0)} % of the boundary sits within a ` +
+            `tile of the same inset (${median}) - that is a rectangle with texture on it`,
+        );
+      }
+    }
+  });
+
+  test('a border made of something is made of more than one thing', () => {
+    // Four edges of identical material meeting at right angles is the same
+    // tell as a stroked rectangle, whatever the material is. The corners are
+    // where it gives itself away, so adjacent edges must differ.
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of SEEDS) {
+        const m = generateMap(bp, seed).map;
+        const materials = new Set<number>();
+        const sample = (x: number, y: number) => materials.add(m.at(x, y));
+        for (let i = 4; i < m.width - 4; i += 3) {
+          sample(i, 0);
+          sample(i, m.height - 1);
+        }
+        for (let i = 4; i < m.height - 4; i += 3) {
+          sample(0, i);
+          sample(m.width - 1, i);
+        }
+        assert.ok(
+          materials.size >= 2,
+          `${bp.id} seed ${seed}: the whole boundary is one material (${[...materials].join(',')})`,
+        );
+      }
+    }
+  });
+});
+
+describe('Buildings are not boxes', () => {
+  test('a good share of structures have a shape other than a rectangle', () => {
+    /**
+     * Every building used to be one stroked rectangle, which is why the maps
+     * read as a box of boxes from the first top-down render. Districts now
+     * carry the shapes they are allowed to take - a warehouse stays a hall
+     * because it needs its floor uninterrupted, an administration block gets
+     * built around a courtyard - so this checks the variety reaches the map
+     * rather than merely existing in the table.
+     *
+     * Counted by walking the roofed area and asking whether its bounding box
+     * is full. A rectangle fills its own bounds; an L, a U and a courtyard
+     * leave a measurable hole.
+     */
+    let rectangular = 0;
+    let shaped = 0;
+
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of [1, 4242, 7]) {
+        const m = generateMap(bp, seed).map;
+        const seen = new Uint8Array(m.width * m.height);
+
+        for (let y = 0; y < m.height; y++) {
+          for (let x = 0; x < m.width; x++) {
+            const i = y * m.width + x;
+            if (seen[i] || m.ceiling[i] === 0) continue;
+
+            // Flood the roofed blob this tile belongs to.
+            const stack = [i];
+            seen[i] = 1;
+            let minX = x, maxX = x, minY = y, maxY = y, area = 0;
+            while (stack.length > 0) {
+              const j = stack.pop()!;
+              const jx = j % m.width;
+              const jy = (j - jx) / m.width;
+              area++;
+              if (jx < minX) minX = jx;
+              if (jx > maxX) maxX = jx;
+              if (jy < minY) minY = jy;
+              if (jy > maxY) maxY = jy;
+              const neighbours = [j - 1, j + 1, j - m.width, j + m.width];
+              for (const n of neighbours) {
+                if (n < 0 || n >= seen.length || seen[n] || m.ceiling[n] === 0) continue;
+                // Do not wrap around the row ends.
+                if ((n === j - 1 && jx === 0) || (n === j + 1 && jx === m.width - 1)) continue;
+                seen[n] = 1;
+                stack.push(n);
+              }
+            }
+
+            // Ignore anything too small to have had a shape chosen for it.
+            const bounds = (maxX - minX + 1) * (maxY - minY + 1);
+            if (bounds < 64) continue;
+            // A rectangle fills its bounds. Allowing 8 % slack covers the tile
+            // or two a doorway punched through an outer wall takes away.
+            if (area >= bounds * 0.92) rectangular++;
+            else shaped++;
+          }
+        }
+      }
+    }
+
+    const total = rectangular + shaped;
+    assert.ok(total >= 40, `only ${total} buildings found across the sector - too few to conclude anything`);
+    assert.ok(
+      shaped / total > 0.25,
+      `only ${shaped} of ${total} structures are anything other than a plain rectangle ` +
+        `(${((shaped / total) * 100).toFixed(0)} %) - the footprint shapes are not reaching the map`,
+    );
+  });
+});
+
+describe('Roads go somewhere, and not in a straight line', () => {
+  /**
+   * Roads carve the plots, so they are the first thing a player navigates by -
+   * and a dead-straight one is both a giveaway that a program drew the level
+   * and a firing lane the length of the map.
+   *
+   * The number that decides this is the longest unbroken run of road surface
+   * in any single row or column. It was measured at 72 tiles on a 132-tile
+   * depot: a 144-metre lane, on the one location whose whole character is that
+   * no range is extreme. The cause was the same mistake that had already
+   * flattened the border bands, made independently a second time - value noise
+   * piles up around the middle of its range, so the sideways displacement came
+   * out at a third of the amplitude the code reads as. Hence this test, which
+   * catches it whichever module it happens in next.
+   */
+
+  /**
+   * Surfaced ground under open sky.
+   *
+   * The roof test is not decoration. Building interiors are floored with
+   * concrete too, so without it this counts warehouse floors as road - which
+   * made the first version of these tests pass with the road network switched
+   * off entirely, and made a twenty-tile warehouse read as a twenty-tile
+   * straight road while I was tuning the curvature against it.
+   */
+  const roadSurface = (m: TileMap, x: number, y: number): boolean =>
+    !m.isSolid(x, y) &&
+    m.ceiling[y * m.width + x] === 0 &&
+    m.floor[y * m.width + x] === Tile.Concrete;
+
+  test('no road runs straight for a third of the map', () => {
+    for (const bp of MAP_BLUEPRINTS) {
+      for (const seed of [1, 4242, 7, 99]) {
+        const m = generateMap(bp, seed).map;
+        let longest = 0;
+        for (let y = 0; y < m.height; y++) {
+          let run = 0;
+          for (let x = 0; x < m.width; x++) {
+            run = roadSurface(m, x, y) ? run + 1 : 0;
+            if (run > longest) longest = run;
+          }
+        }
+        for (let x = 0; x < m.width; x++) {
+          let run = 0;
+          for (let y = 0; y < m.height; y++) {
+            run = roadSurface(m, x, y) ? run + 1 : 0;
+            if (run > longest) longest = run;
+          }
+        }
+        // Proportional, with an absolute floor. Both terms are needed: on a
+        // 132-tile depot the failure was a 72-tile lane, which is only alarming
+        // relative to the map, while on the 76-tile Verladehof a road crossing
+        // a third of the site is 58 metres and perfectly ordinary. Without the
+        // floor this asks the smallest location to be curvier than physics
+        // allows; without the proportion it lets the largest one carry a lane
+        // half its width.
+        const limit = Math.max(30, Math.round(m.width * 0.36));
+        assert.ok(
+          longest <= limit,
+          `${bp.id} seed ${seed}: a road runs ${longest} tiles dead straight on a ` +
+            `${m.width}-tile map (limit ${limit})`,
+        );
+      }
+    }
+  });
+
+  test('and there is something to navigate by, in proportion to the site', () => {
+    // The other half of the claim: a test that only bounds straightness is
+    // satisfied by having no roads at all, which is the cheapest way to pass
+    // it. Bounded against the blueprint's own road count rather than a single
+    // figure, because that count is a character lever - the Klaerwerk is a
+    // compound reached on foot and is supposed to be down at one access road,
+    // while the dock is organised around lorries.
+    for (const bp of MAP_BLUEPRINTS) {
+      const m = generateMap(bp, 4242).map;
+      let road = 0;
+      let walkable = 0;
+      for (let y = 0; y < m.height; y++) {
+        for (let x = 0; x < m.width; x++) {
+          if (m.isSolid(x, y)) continue;
+          walkable++;
+          if (roadSurface(m, x, y)) road++;
+        }
+      }
+      const share = road / Math.max(1, walkable);
+      // Every location has a route through it.
+      assert.ok(
+        share > 0.03,
+        `${bp.id}: only ${(share * 100).toFixed(1)} % of walkable ground is surfaced - ` +
+          'there is no route through here at all',
+      );
+      // The ones built around vehicles have a network, not a lane.
+      if (bp.roads >= 4) {
+        assert.ok(
+          share > 0.1,
+          `${bp.id} asks for ${bp.roads} roads but only ${(share * 100).toFixed(1)} % of its ` +
+            'walkable ground is surfaced - that is not a network',
+        );
+      }
+    }
+  });
+});
+
+describe('The place goes on without you watching', () => {
+  /**
+   * Enemies far from the player are skipped by the director - no pathfinding,
+   * no line of sight, no weapon logic - because all three are expensive and
+   * nobody can observe the result at that range. That is the right call and it
+   * is not what this test is about.
+   *
+   * What it is about is that being skipped used to mean being frozen. Measured
+   * on the harbour: after a minute of raid, thirty of thirty-eight hostiles
+   * had not moved a step. A player who walked eighty tiles to the far side of
+   * the map found every one of them standing exactly where it spawned, in
+   * every raid, for the full thirty minutes - so the spawn table was worth
+   * learning once and never changed after. Distant hostiles now walk their
+   * round by dead reckoning, which costs a few arithmetic operations each and
+   * measured as no change at all in the simulation budget.
+   */
+
+  const stubAudio = () => ({
+    listener: { x: 0, y: 0, angle: 0, hearingFactor: 1, deafness: 0 },
+    setAmbience: () => {}, stopAmbience: () => {}, playThunder: () => {},
+    play: () => {}, applyMuzzleDeafness: () => {}, update: () => {},
+  });
+
+  test('hostiles across the map keep walking their rounds', () => {
+    // The harbour, because it is the location where this went wrong: 160 tiles
+    // across against a freeze radius of 60, so most of the garrison is out of
+    // range from anywhere the player can stand.
+    const bus = new EventBus<Record<string, never>>() as never;
+    const blueprint = MAP_BLUEPRINTS.find((b) => b.id === 'harbour')!;
+    const profile = new Profile(bus, 11);
+    const session = new RaidSession(bus, profile, stubAudio() as never, blueprint, 11);
+    (session.player.health as unknown as { applyDamage: () => void }).applyDamage = () => {};
+
+    const enemies = (session as unknown as {
+      ai: { enemies: Array<{ x: number; y: number; alive: boolean }> };
+    }).ai.enemies;
+    assert.ok(enemies.length > 20, `expected a full garrison, got ${enemies.length}`);
+
+    const start = enemies.map((e) => ({ x: e.x, y: e.y }));
+    const dt = 1 / 20;
+    for (let step = 0; step < 40 * 20; step++) {
+      session.update(dt);
+    }
+
+    // Straight-line displacement, not distance walked: a hostile that wandered
+    // in a circle and came home has still been somewhere, but this is the
+    // conservative measure and the frozen case scores exactly zero on it.
+    let moved = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      if (!enemies[i].alive) continue;
+      if (Math.hypot(enemies[i].x - start[i].x, enemies[i].y - start[i].y) > 3) moved++;
+    }
+    const alive = enemies.filter((e) => e.alive).length;
+
+    assert.ok(
+      moved > alive * 0.6,
+      `only ${moved} of ${alive} surviving hostiles left the tile they spawned on after ` +
+        '40 seconds - the far side of the map is a diorama',
+    );
+  });
+
+  test('and a location has enough rounds to walk that they are not all the same one', () => {
+    // The drift above needs a route to follow, and the generator was handing
+    // out three for thirteen districts on the densest map: the line-of-sight
+    // test between consecutive legs was written for open yards and rejects
+    // almost everything in a warren, so most of the garrison shared a handful
+    // of identical rounds or had none.
+    for (const bp of MAP_BLUEPRINTS) {
+      const g = generateMap(bp, 11);
+      assert.ok(
+        g.patrolRoutes.length >= Math.min(6, g.map.zones.length),
+        `${bp.id}: ${g.patrolRoutes.length} patrol routes for ${g.map.zones.length} districts`,
+      );
+      for (const route of g.patrolRoutes) {
+        assert.ok(route.points.length >= 2, `${bp.id}: a route with ${route.points.length} waypoints is not a round`);
+      }
+    }
   });
 });

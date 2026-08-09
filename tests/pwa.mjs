@@ -28,9 +28,30 @@ import { findChromium } from './browser.mjs';
 // writing this, and it only surfaced after every other check had passed.
 const target = process.argv[2] ?? 'http://127.0.0.1:4200/Espaceshooter/';
 
+/**
+ * Honour an outbound proxy when one is configured.
+ *
+ * Sandboxed environments route HTTPS through a local proxy, and Chromium does
+ * not read `HTTPS_PROXY` the way curl does - so a live URL that curl fetches
+ * happily comes back as ERR_CONNECTION_RESET in the browser, which reads as a
+ * broken deployment rather than a missing setting.
+ */
+const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/)/.test(target);
+// Never route a local server through it: the proxy would try to relay a
+// request that has nowhere to go, and the run simply hangs.
+const proxy = isLocal ? null : (process.env.HTTPS_PROXY || process.env.https_proxy);
+
 const browser = await chromium.launch({
   executablePath: findChromium(),
-  args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
+  ...(proxy ? { proxy: { server: proxy, bypass: 'localhost,127.0.0.1,::1' } } : {}),
+  args: [
+    '--no-sandbox',
+    '--use-gl=swiftshader',
+    '--enable-unsafe-swiftshader',
+    // The proxy terminates TLS with its own CA, which the browser has no
+    // reason to trust. Only relaxed when a proxy is actually in use.
+    ...(proxy ? ['--ignore-certificate-errors'] : []),
+  ],
 });
 
 const failures = [];

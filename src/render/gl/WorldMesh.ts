@@ -66,6 +66,15 @@ const SHADE_EAST_WEST = 1.0;
 const SHADE_FLOOR = 1.0;
 const SHADE_CEILING = 0.72;
 
+/**
+ * The highest the camera can ever be, in metres, plus a little.
+ *
+ * 1.62 m standing and 0.55 m at the peak of a vault; the margin covers the
+ * frame either side of that peak. Raise this the day the player can stand on
+ * something, or the tops of walls will be missing when they do.
+ */
+const MAX_EYE_HEIGHT_M = 2.3;
+
 export function buildWorldMesh(map: TileMap): MeshData {
   const opaque: number[] = [];
   const transparent: number[] = [];
@@ -113,23 +122,45 @@ export function buildWorldMesh(map: TileMap): MeshData {
     return def.wall && !def.opaque;
   };
 
-  for (let y = 0; y < map.height; y++) {
-    for (let x = 0; x < map.width; x++) {
-      const index = y * map.width + x;
-      const tile = map.tiles[index];
-      const def = TILE_DEFS[tile];
+  // --- floors and ceilings, merged along each row --------------------------
+  //
+  // These are the bulk of the mesh and almost none of it is interesting. A
+  // 160-tile map has about twenty thousand walkable tiles, and one quad each
+  // came to 121 000 vertices - two thirds of the whole world - to draw a flat
+  // plane. Runs of tiles sharing a surface and untouched by ambient occlusion
+  // collapse into a single quad; the texture array repeats, so a run of eight
+  // is indistinguishable from the eight quads it replaces.
+  //
+  // The AO condition is what keeps it exact rather than approximate. Corner
+  // occlusion is what draws the dark seam where a wall meets the ground, and a
+  // merged quad can only carry four corner values - so any tile whose corners
+  // are shaded stays on its own. Those are the tiles beside walls, which are a
+  // small minority of an open yard and all of a corridor.
+  const floorZ = (index: number): number => (map.floor[index] === Tile.Water ? -0.03 : 0);
+  const floorAoFlat = (x: number, y: number, z: number): boolean =>
+    cornerAo(x, y, x, y, z) === 1 &&
+    cornerAo(x + 1, y, x, y, z) === 1 &&
+    cornerAo(x + 1, y + 1, x, y, z) === 1 &&
+    cornerAo(x, y + 1, x, y, z) === 1;
 
-      if (!def.wall) {
-        // --- floor ---------------------------------------------------------
-        const floorLayer = floorTextureFor(map.floor[index]);
-        // Water sits fractionally lower so a pier reads as standing above it.
-        const z = map.floor[index] === Tile.Water ? -0.03 : 0;
-        // AO per corner, in the same order the corners are pushed. This is
-        // what draws the dark seam where a wall meets the ground.
+  for (let y = 0; y < map.height; y++) {
+    let x = 0;
+    while (x < map.width) {
+      const index = y * map.width + x;
+      if (TILE_DEFS[map.tiles[index]].wall) {
+        x++;
+        continue;
+      }
+
+      const layer = floorTextureFor(map.floor[index]);
+      // Water sits fractionally lower so a pier reads as standing above it.
+      const z = floorZ(index);
+
+      if (!floorAoFlat(x, y, z)) {
         pushQuad(
           opaque,
           x, y, z, x + 1, y, z, x + 1, y + 1, z, x, y + 1, z,
-          floorLayer, SHADE_FLOOR, AXIS_UP,
+          layer, SHADE_FLOOR, AXIS_UP,
           [
             cornerAo(x, y, x, y, z),
             cornerAo(x + 1, y, x, y, z),
@@ -137,28 +168,79 @@ export function buildWorldMesh(map: TileMap): MeshData {
             cornerAo(x, y + 1, x, y, z),
           ],
         );
-
-        // --- ceiling -------------------------------------------------------
-        const ceilTile = map.ceiling[index];
-        if (ceilTile !== 0) {
-          const layer = TILE_DEFS[ceilTile]?.texture ?? 1;
-          // Wound the other way so it faces down.
-          pushQuad(
-            opaque,
-            x, y + 1, 1, x + 1, y + 1, 1, x + 1, y, 1, x, y, 1,
-            layer, SHADE_CEILING, AXIS_DOWN,
-          );
-        }
+        x++;
         continue;
       }
+
+      let run = 1;
+      while (x + run < map.width) {
+        const j = index + run;
+        if (TILE_DEFS[map.tiles[j]].wall) break;
+        if (floorTextureFor(map.floor[j]) !== layer || floorZ(j) !== z) break;
+        if (!floorAoFlat(x + run, y, z)) break;
+        run++;
+      }
+      pushQuad(
+        opaque,
+        x, y, z, x + run, y, z, x + run, y + 1, z, x, y + 1, z,
+        layer, SHADE_FLOOR, AXIS_UP, NO_AO, 0, 1, run,
+      );
+      x += run;
+    }
+  }
+
+  for (let y = 0; y < map.height; y++) {
+    let x = 0;
+    while (x < map.width) {
+      const index = y * map.width + x;
+      const ceilTile = map.ceiling[index];
+      if (TILE_DEFS[map.tiles[index]].wall || ceilTile === 0) {
+        x++;
+        continue;
+      }
+      const layer = TILE_DEFS[ceilTile]?.texture ?? 1;
+      let run = 1;
+      while (x + run < map.width) {
+        const j = index + run;
+        if (TILE_DEFS[map.tiles[j]].wall || map.ceiling[j] !== ceilTile) break;
+        run++;
+      }
+      // Wound the other way so it faces down.
+      pushQuad(
+        opaque,
+        x, y + 1, 1, x + run, y + 1, 1, x + run, y, 1, x, y, 1,
+        layer, SHADE_CEILING, AXIS_DOWN, NO_AO, 0, 1, run,
+      );
+      x += run;
+    }
+  }
+
+  // --- walls ---------------------------------------------------------------
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      const index = y * map.width + x;
+      const tile = map.tiles[index];
+      const def = TILE_DEFS[tile];
+
+      if (!def.wall) continue;
 
       // --- wall ------------------------------------------------------------
       const h = def.height / METERS_PER_TILE;
       const layer = def.texture;
       const target = isSeeThrough(tile) ? transparent : opaque;
 
-      // Top face, wherever the wall does not reach the ceiling.
-      if (h < 1 || map.ceiling[index] === 0) {
+      // Top face, wherever the wall does not reach the ceiling *and* an eye
+      // could ever get above it.
+      //
+      // The world has one storey and no way onto a roof, so the highest the
+      // camera ever sits is 1.62 m standing plus the 0.55 m peak of a vault -
+      // and a surface above that cannot be seen from anywhere the player can
+      // be. Everything from a shipping container upwards was emitting a top
+      // quad regardless, and since border bands are outdoors and up to sixteen
+      // tiles deep, that meant roofing over thousands of tiles of solid rock
+      // nobody will ever look down on. Measured on the harbour: 18 900
+      // vertices, about a tenth of the map's geometry, drawn for nothing.
+      if ((h < 1 || map.ceiling[index] === 0) && def.height < MAX_EYE_HEIGHT_M) {
         pushQuad(
           target, x, y, h, x + 1, y, h, x + 1, y + 1, h, x, y + 1, h,
           layer, SHADE_TOP, AXIS_UP,
@@ -288,11 +370,21 @@ function pushQuad(
   ao: readonly number[] = NO_AO,
   v0 = 0,
   v1 = 1,
+  /**
+   * How many tiles the quad spans along its u axis.
+   *
+   * Only ever anything but 1 for merged floor and ceiling runs. The world
+   * texture array is set to REPEAT, so a u of 8 tiles the image eight times
+   * across the quad and a run of eight tiles looks exactly like eight separate
+   * quads did.
+   */
+  uSpan = 1,
 ): void {
-  // UVs: (0,v1) at the first corner running to (1,v0), which puts the texture
-  // the right way up on vertical faces and tiles correctly on horizontal ones.
+  // UVs: (0,v1) at the first corner running to (uSpan,v0), which puts the
+  // texture the right way up on vertical faces and tiles correctly on
+  // horizontal ones.
   const u0 = 0;
-  const u1 = 1;
+  const u1 = uSpan;
 
   pushVertex(out, ax, ay, az, u0, v1, layer, shade, axis, ao[0]);
   pushVertex(out, bx, by, bz, u1, v1, layer, shade, axis, ao[1]);

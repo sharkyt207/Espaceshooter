@@ -225,7 +225,11 @@ export class AIDirector {
       const dist = distance(enemy.x, enemy.y, target.x, target.y);
       const aware = enemy.awareness.level > 0.05 || enemy.state === 'engage' || enemy.state === 'investigate';
       if (!aware) {
-        if (dist > FREEZE_DISTANCE) continue;
+        if (dist > FREEZE_DISTANCE) {
+          // Not simulated, but not standing still either - see Enemy.drift.
+          enemy.drift(dt, map);
+          continue;
+        }
         // Distant, oblivious enemies still patrol, just less often.
         if (dist > LOD_DISTANCE && ((this.elapsed * 3) | 0) % 3 !== (enemy.id % 3)) continue;
       }

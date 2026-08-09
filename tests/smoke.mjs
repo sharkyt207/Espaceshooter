@@ -593,6 +593,108 @@ try {
       `fire ${multitouch.fire}, aiming ${multitouch.aiming}`,
   );
 
+  // --- the screen the camera is allowed to use ------------------------------
+  //
+  // The stick zone used to be a full-height column down the left 42 % of the
+  // screen, and every touch that started inside it was a stick touch. Measured
+  // consequence: a camera swipe beginning anywhere in that column produced
+  // exactly zero camera movement, including one starting over the vitals panel,
+  // while the same swipe on the right moved 0.35 rad. Two fifths of the screen
+  // did nothing when you tried to look with it, which is most of "I swipe and
+  // nothing happens".
+  //
+  // Two rules fix it and both are checked here: the zone is a corner rather
+  // than a column, and a second finger is never a second stick.
+  await keepAlive();
+  const lookZones = await page.evaluate(async () => {
+    const g = window.game;
+    if (!g.session) return null;
+    const input = g.input;
+    const surface = document.querySelector('.game-canvas').parentElement;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const ev = (type, id, x, y) =>
+      new PointerEvent(type, {
+        pointerId: id, clientX: x, clientY: y, bubbles: true,
+        pointerType: 'touch', isPrimary: id === 1,
+      });
+    // The look accumulator is drained by the loop, so pitch only moves once a
+    // frame has run. Two of them, because the first may already be in flight.
+    const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const reset = () => { input.releaseAll(); g.session.player.pitch = 0; };
+
+    const swipe = async (id, x, y, dy) => {
+      const el = document.elementFromPoint(x, y) ?? surface;
+      el.dispatchEvent(ev('pointerdown', id, x, y));
+      el.dispatchEvent(ev('pointermove', id, x, y + dy));
+      el.dispatchEvent(ev('pointerup', id, x, y + dy));
+      await frame();
+      return g.session.player.pitch;
+    };
+
+    const out = {};
+
+    // Upper left: outside the stick corner, so it looks.
+    reset();
+    out.upperLeft = await swipe(11, W * 0.2, H * 0.18, 80);
+
+    // Lower left with the stick already held by another finger: also looks.
+    reset();
+    surface.dispatchEvent(ev('pointerdown', 12, W * 0.12, H * 0.72));
+    out.secondFinger = await swipe(13, W * 0.3, H * 0.5, 80);
+
+    // Lower left, first finger: that is the stick, and must stay the stick.
+    reset();
+    surface.dispatchEvent(ev('pointerdown', 14, W * 0.15, H * 0.8));
+    surface.dispatchEvent(ev('pointermove', 14, W * 0.15, H * 0.8 - 50));
+    await frame();
+    out.stickForward = input.state.moveY;
+    surface.dispatchEvent(ev('pointerup', 14, W * 0.15, H * 0.8 - 50));
+
+    // A finger that lands just outside a button's visible edge still presses
+    // it. A touch target the size of its own graphic is a target you miss,
+    // and the misses read as the game ignoring you.
+    const fire = document.querySelector('[data-control="fire"]');
+    const r = fire.getBoundingClientRect();
+    const controlAt = (px, py) =>
+      document.elementFromPoint(px, py)?.closest('[data-control]')?.dataset.control ?? null;
+    out.onButton = controlAt(r.left + r.width / 2, r.top + r.height / 2);
+    out.justOutside = controlAt(r.left - 6, r.top + r.height / 2);
+    out.wellOutside = controlAt(r.left - 40, r.top + r.height / 2);
+
+    reset();
+    return out;
+  });
+
+  assert(lookZones, 'the raid should still be running for the look-zone check');
+  assert(
+    lookZones.upperLeft < -0.01,
+    `a swipe in the upper left must turn the camera (pitch ${lookZones.upperLeft.toFixed(4)} rad)`,
+  );
+  assert(
+    lookZones.secondFinger < -0.01,
+    `a second finger in the left column must look, not be discarded ` +
+      `(pitch ${lookZones.secondFinger.toFixed(4)} rad)`,
+  );
+  assert(
+    lookZones.stickForward > 0.3,
+    `the first finger low on the left is still the stick (moveY ${lookZones.stickForward.toFixed(2)})`,
+  );
+  assert(lookZones.onButton === 'fire', 'the fire button must be hittable at its centre');
+  assert(
+    lookZones.justOutside === 'fire',
+    `6 px outside the fire button must still press it, hit ${lookZones.justOutside}`,
+  );
+  assert(
+    lookZones.wellOutside !== 'fire',
+    'the enlarged hit ring must not swallow the whole corner of the screen',
+  );
+  console.log(
+    `look zones: upper-left ${lookZones.upperLeft.toFixed(3)} rad, ` +
+      `second finger ${lookZones.secondFinger.toFixed(3)} rad, ` +
+      `stick ${lookZones.stickForward.toFixed(2)}, button edge +6 px hits`,
+  );
+
   // --- play -----------------------------------------------------------------
   await keepAlive();
   await page.keyboard.down('KeyW');

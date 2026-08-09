@@ -103,6 +103,15 @@ try {
   const upright = spearman(gpuH, swH);
   const mirrored = spearman(gpuH, flipHorizontally(swH));
   console.log(`horizontal structure: upright ${upright.toFixed(3)}, mirrored ${mirrored.toFixed(3)}`);
+  // A frame with nothing in it correlates with nothing, in either orientation.
+  // Without this guard that reads as "mirrored", which sent me looking for a
+  // winding bug in a renderer that was fine - the camera was facing a wall.
+  assert(
+    Math.abs(upright) > 0.2 || Math.abs(mirrored) > 0.2,
+    `neither orientation correlates (upright ${upright.toFixed(3)}, mirrored ` +
+      `${mirrored.toFixed(3)}) - the frame has no horizontal structure to compare, ` +
+      `so the camera is looking at a blank surface rather than the world being mirrored`,
+  );
   assert(
     upright > mirrored,
     `the frames agree better when one is mirrored (${upright.toFixed(3)} vs ${mirrored.toFixed(3)}), ` +
@@ -202,15 +211,41 @@ async function runOnce(label, mode) {
   });
   await page.waitForTimeout(2500);
 
-  // Freeze the camera at a fixed pose. Left to itself the player drifts with
-  // recoil and the two runs would be comparing different views.
+  // Freeze the camera at a fixed pose, facing something worth comparing.
+  //
+  // Both runs must see the identical view, so the pose is snapped to tile
+  // centres and a whole heading - but "angle 0, wherever you spawned" is not
+  // enough. Once the locations grew and filled in, that pose put the camera a
+  // couple of tiles from a blank wall: a frame of flat brick has no horizontal
+  // structure, so both the upright and mirrored correlations collapsed towards
+  // zero and the mirror check reported a mirrored world from pure noise.
+  //
+  // So the heading is chosen rather than assumed: of the four cardinals, take
+  // the one with the longest clear view. That is deterministic from the map,
+  // identical in both runs, and guarantees there is something in frame.
   await page.evaluate(() => {
     const s = window.game.session;
     if (!s) return;
     s.player.x = Math.floor(s.player.x) + 0.5;
     s.player.y = Math.floor(s.player.y) + 0.5;
-    s.player.angle = 0;
     s.player.pitch = 0;
+
+    const map = s.map;
+    let best = 0;
+    let bestRun = -1;
+    for (let dir = 0; dir < 4; dir++) {
+      const dx = [1, 0, -1, 0][dir];
+      const dy = [0, 1, 0, -1][dir];
+      let run = 0;
+      while (run < 40) {
+        const nx = Math.floor(s.player.x) + dx * (run + 1);
+        const ny = Math.floor(s.player.y) + dy * (run + 1);
+        if (map.isSolid(nx, ny)) break;
+        run++;
+      }
+      if (run > bestRun) { bestRun = run; best = dir; }
+    }
+    s.player.angle = (best * Math.PI) / 2;
   });
   await page.waitForTimeout(700);
 
