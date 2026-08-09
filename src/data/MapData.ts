@@ -15,17 +15,20 @@ import type { MapBlueprint } from '../world/MapGenerator';
  *
  * These grew substantially, and the ceiling was measured rather than guessed.
  * Cost scales with area in three places: world mesh (the binding one),
- * navigation, and the cover map. Measured on this build:
+ * navigation, and the cover map. As built, per location:
  *
- *     96²   9.2k tiles    54k vertices   2.5 MB
- *    144²  20.7k tiles   115k vertices   5.3 MB
- *    160²  25.6k tiles  ~145k vertices  ~6.6 MB
- *    192²  36.9k tiles   206k vertices   9.4 MB
- *    224²  50.2k tiles   277k vertices  12.7 MB
+ *   harbour  160²  25.6k tiles  104k vertices  3.6 MB   61 ms to build
+ *   depot    132²  17.4k tiles   93k vertices  3.2 MB   48 ms
+ *   filter   116²  13.5k tiles   85k vertices  2.9 MB   36 ms
+ *   works    112²  12.5k tiles   88k vertices  3.0 MB   35 ms
+ *   yard      76²   5.8k tiles   34k vertices  1.2 MB   11 ms
  *
- * 192² is the point where a low-tier phone's vertex budget starts to hurt, so
- * the largest location sits at 160² - nearly three times the old harbour's
- * area with roughly 6.6 MB of geometry, which is comfortable.
+ * Around 200k vertices is where a low-tier phone's budget starts to hurt, so
+ * there is roughly twice the headroom here. That was not always true: the
+ * border bands and the shaped buildings pushed the harbour to 202k, and two
+ * changes to the mesher brought it back - not emitting top faces on anything
+ * taller than the camera can ever be, and merging flat runs of floor and
+ * ceiling into single quads. Both are in WorldMesh.ts with the numbers.
  *
  * The other bound is the player's legs, not the hardware. Crossing 160² corner
  * to corner is about 226 tiles; sprinting, that is a real journey rather than

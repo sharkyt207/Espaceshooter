@@ -1110,9 +1110,86 @@ describe('WorldMesh', () => {
     // neighbours' floors share with it.
     assert.ok(aoAt.get('6,6')! < 0.95, 'the floor corner against the block should be darkened');
     assert.ok(aoAt.get('7,7')! < 0.95, 'and so should the opposite one');
-    // Well clear of it, nothing occludes anything.
-    assert.equal(aoAt.get('2,2'), 1, 'open floor should be fully lit');
-    assert.equal(aoAt.get('10,3'), 1, 'and so should floor on the other side');
+
+    // Everything else is fully lit.
+    //
+    // Written as "no vertex away from the block is shaded" rather than as a
+    // lookup at two chosen grid points, because open floor is merged into runs
+    // now and a run has vertices only at its ends - so a point-lookup version
+    // of this assertion goes looking for a vertex that no longer exists and
+    // fails on a mesh that is pixel-identical. This form says the same thing
+    // about the picture without depending on how the picture is cut up.
+    for (const [key, ao] of aoAt) {
+      const [gx, gy] = key.split(',').map(Number);
+      // The grid points on the block's own footprint are the shaded ones.
+      if (gx >= 6 && gx <= 7 && gy >= 6 && gy <= 7) continue;
+      // So is the map boundary: out of bounds answers solid to every query, by
+      // design, so the edge of the world casts a contact shadow like any other
+      // wall. Not what this test is about.
+      if (gx === 0 || gy === 0 || gx === 12 || gy === 12) continue;
+      assert.equal(ao, 1, `open floor at ${key} should be fully lit, was ${ao}`);
+    }
+  });
+
+  test('a merged run repeats its texture once per tile', () => {
+    // The other way merging goes wrong, and the one that leaves no trace in
+    // any count: a run of eight tiles drawn with a 0..1 texture span stretches
+    // a single copy of the image over sixteen metres of ground. The mesh is
+    // the right size, the floor has no holes, and the world looks like it was
+    // painted with a mop. Only the UVs say so.
+    const map = blockMap();
+    const mesh = buildWorldMesh(map);
+    const uAt = (i: number) => mesh.opaque[i * FLOATS_PER_VERTEX + 3];
+
+    let merged = 0;
+    for (let i = 0; i < mesh.opaqueCount; i += 6) {
+      const a = vertexAt(mesh.opaque, i);
+      const b = vertexAt(mesh.opaque, i + 1);
+      if (a.axis !== AXIS_UP || a.z !== 0) continue;
+      const span = Math.abs(b.x - a.x);
+      if (span > 1) merged++;
+      assert.equal(
+        Math.abs(uAt(i + 1) - uAt(i)), span,
+        `a floor quad spanning ${span} tiles carries ${Math.abs(uAt(i + 1) - uAt(i))} ` +
+          'texture repeats - the ground will be smeared across it',
+      );
+    }
+    assert.ok(merged > 0, 'no floor runs were merged at all, so this proves nothing');
+  });
+
+  test('and merging the floor into runs does not leave holes in it', () => {
+    // Runs of open floor collapse into single quads, which halved the mesh.
+    // The failure mode that buys is a gap: a tile the merge skipped, or a run
+    // that stops one short, leaves a hole the player looks through into the
+    // void. Nothing else in the suite would notice - the vertex count would
+    // simply be a little lower.
+    const map = blockMap();
+    const mesh = buildWorldMesh(map);
+
+    const covered = new Uint8Array(map.width * map.height);
+    for (let i = 0; i < mesh.opaqueCount; i += 6) {
+      const a = vertexAt(mesh.opaque, i);
+      const c = vertexAt(mesh.opaque, i + 2);
+      if (a.axis !== AXIS_UP || a.z !== 0) continue;
+      // Quads are axis-aligned, so the first and third corners bound them.
+      for (let y = Math.min(a.y, c.y); y < Math.max(a.y, c.y); y++) {
+        for (let x = Math.min(a.x, c.x); x < Math.max(a.x, c.x); x++) {
+          covered[y * map.width + x] += 1;
+        }
+      }
+    }
+
+    for (let y = 0; y < map.height; y++) {
+      for (let x = 0; x < map.width; x++) {
+        const i = y * map.width + x;
+        const isFloor = map.tiles[i] === Tile.Floor;
+        assert.equal(
+          covered[i], isFloor ? 1 : 0,
+          `tile ${x},${y} is ${isFloor ? 'floor' : 'wall'} but is covered by ` +
+            `${covered[i]} floor quads`,
+        );
+      }
+    }
   });
 
   test('a wall is darkest where it meets the ground', () => {
