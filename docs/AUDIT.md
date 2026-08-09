@@ -34,6 +34,13 @@ Das ist ein Muster, kein Zufall, und es hat eine Konsequenz für die Prüfstrate
 
 > **Ein Test, der eine Funktion aufruft, prüft nicht, ob das Spiel sie aufruft.**
 
+Der jüngste Fall dieser Art war die **Extraktion selbst** — die Handlung, nach
+der das Genre benannt ist. Ausgänge wurden auf Existenz und Erreichbarkeit
+geprüft, und der Browser-Durchlauf *bricht* den Einsatz ab, statt durch einen zu
+gehen. Die Abfolge, um die das ganze Spiel gebaut ist — etwas aufheben, zum
+Ausgang tragen, den Ausgang halten, das Getragene behalten — war nie am Stück
+gelaufen. Jeder Teil existierte; nichts prüfte, dass sie verbunden sind.
+
 Deshalb misst der KI-Test jetzt die *Spur*, die ein Gegner über eine Karte
 zieht, und nicht seinen Zustandsautomaten. Und deshalb hat die Zielhilfe drei
 Prüfungen statt einer — zwei davon wären mit dem Fehler grün geblieben.
@@ -248,7 +255,7 @@ für das Compositing etwa 100 ms je Bild.
 | Ausrüstung / Verbrauchsgüter | 30 / 28 |
 | Karten | 5 (96² bis 52²) |
 | Händler / Aufträge / Basismodule / Rezepte | 4 / 9 / 6 / 16 |
-| Simulationstests | 152 |
+| Simulationstests | 156 |
 
 ---
 
@@ -256,7 +263,7 @@ für das Compositing etwa 100 ms je Bild.
 
 | Werkzeug | Prüft |
 |---|---|
-| `npm test` | 152 Simulationstests, ohne Browser |
+| `npm test` | 156 Simulationstests, ohne Browser |
 | `tests/smoke.mjs` | Echtes Chromium, ganze Sitzung, 24 Aufnahmen |
 | `tests/viewports.mjs` | 5 Geräte: Überlauf, zu kleine Ziele, **Überlappung** |
 | `tests/renderers.mjs` | Beide Renderpfade: Struktur, Spiegelung **und Helligkeit** |

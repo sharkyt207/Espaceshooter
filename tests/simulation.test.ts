@@ -39,6 +39,7 @@ import { LootSystem } from '../src/loot/LootSystem';
 import { LOOT_TABLES } from '../src/loot/LootTables';
 import { Progression } from '../src/meta/Progression';
 import { Profile } from '../src/meta/Profile';
+import { RaidSession } from '../src/raid/RaidSession';
 import { Hideout } from '../src/meta/Hideout';
 import { QuestSystem } from '../src/meta/Quests';
 import { TraderSystem } from '../src/meta/Traders';
@@ -2122,6 +2123,199 @@ describe('Risk and reward', () => {
           `(${concentration.toFixed(2)}x, wanted > 1.4x)`,
       );
     }
+  });
+});
+
+describe('The extraction loop', () => {
+  /**
+   * The one thing this genre is named after, and the one path nothing tested.
+   *
+   * Extraction points were checked for existing and for being reachable, and
+   * the browser walkthrough *abandons* the raid rather than leaving through
+   * one. So the sequence the whole game is built around - pick something up,
+   * carry it to an exit, hold the exit, keep what you carried - had never been
+   * run end to end. Every part of it existed; nothing asserted they were
+   * joined.
+   */
+
+  const stubAudio = () => ({
+    listener: { x: 0, y: 0, angle: 0, hearingFactor: 1, deafness: 0 },
+    setAmbience: () => {},
+    stopAmbience: () => {},
+    playThunder: () => {},
+    play: () => {},
+    applyMuzzleDeafness: () => {},
+    update: () => {},
+  });
+
+  /**
+   * A raid on the smallest, densest map.
+   *
+   * `invulnerable` defaults on, and the first run of these tests is the reason:
+   * standing still in an exit for the hold duration on the Verladehof, with
+   * twenty hostiles and no return fire, got the player killed - "Gefallen:
+   * Brustdurchschuss". That is the map working exactly as designed, and it is
+   * not what these tests are asking about. They ask whether holding an exit
+   * extracts you and whether what you carried survives the trip; whether you
+   * can survive the Verladehof standing still is a different question with a
+   * known answer.
+   *
+   * The death test below turns it off and kills the player outright, so the
+   * losing branch is still covered.
+   */
+  const deploy = (seed = 11, invulnerable = true) => {
+    const bus = new EventBus<Record<string, never>>() as never;
+    const profile = new Profile(bus, seed);
+    const blueprint = MAP_BLUEPRINTS.find((b) => b.id === 'yard')!;
+    const session = new RaidSession(
+      bus, profile, stubAudio() as never, blueprint, seed,
+    );
+    if (invulnerable) {
+      (session.player.health as unknown as { applyDamage: () => void }).applyDamage = () => {};
+    }
+    return { bus, profile, session };
+  };
+
+  /**
+   * Stand in an exit until it lets you out.
+   *
+   * Teleporting rather than pathing: this is a test of the extraction rule,
+   * not of navigation, and walking there would make it a test of both.
+   */
+  const holdExtract = (session: RaidSession, extract: { x: number; y: number }): void => {
+    for (let i = 0; i < 60 * 40 && session.phase !== 'ended'; i++) {
+      session.player.x = extract.x;
+      session.player.y = extract.y;
+      session.update(1 / 60);
+    }
+  };
+
+  const freeExtract = (session: RaidSession) =>
+    session.generated.extracts.find((e) => !e.condition || e.condition.kind === 'always')!;
+
+  test('standing in an exit long enough ends the raid alive', () => {
+    const { session } = deploy();
+    const exit = freeExtract(session);
+    assert.ok(exit, 'the map has to offer at least one unconditional exit');
+
+    holdExtract(session, exit);
+
+    const result = session.raidResult;
+    assert.ok(result, 'holding an extraction should have produced a result');
+    assert.equal(result.survived, true, `expected to survive, got: ${result.reason}`);
+    assert.equal(result.extractName, exit.name);
+    // Specific enough to be about *extraction*. `> 0` was not: hostiles kill
+    // each other during the hold, and a single kill satisfied it, so the
+    // assertion survived deleting the extraction bonus entirely. The bonus is
+    // 600 x the conditions multiplier; the cheapest kill is 120.
+    assert.ok(
+      result.xpEarned >= 500,
+      `extracting should pay its own bonus, not just whatever happened during ` +
+        `the hold (earned ${result.xpEarned})`,
+    );
+  });
+
+  test('leaving the zone cancels the hold - no partial credit', () => {
+    const { session } = deploy();
+    const exit = freeExtract(session);
+    const spawn = session.generated.playerSpawns[0];
+
+    const frames = (n: number, x: number, y: number) => {
+      for (let i = 0; i < n && session.phase !== 'ended'; i++) {
+        session.player.x = x;
+        session.player.y = y;
+        session.update(1 / 60);
+      }
+    };
+
+    // Almost all the way through the hold.
+    const almost = Math.max(1, Math.round(exit.holdSeconds * 60) - 20);
+    frames(almost, exit.x, exit.y);
+    assert.equal(session.phase, 'extracting', 'should be mid-hold at this point');
+
+    // Step out, then come back.
+    frames(120, spawn.x, spawn.y);
+    assert.notEqual(session.phase, 'ended', 'walking away must not extract you');
+
+    // The discriminating part. If progress had merely paused, those last few
+    // frames would finish it; the rule is that it resets, so they must not.
+    //
+    // My first version of this test only asserted that stepping away did not
+    // end the raid - which is true whether progress resets or freezes, because
+    // completing requires standing inside either way. It passed against a
+    // deliberately broken reset, and measured nothing.
+    frames(25, exit.x, exit.y);
+    assert.notEqual(
+      session.phase, 'ended',
+      'returning to the exit must start the hold again, not resume it',
+    );
+
+    // And a full hold from that point does work, so this is a reset rather
+    // than the exit having become unusable.
+    frames(Math.round(exit.holdSeconds * 60) + 30, exit.x, exit.y);
+    assert.equal(session.phase, 'ended', 'a complete hold should still extract');
+    assert.equal(session.raidResult?.survived, true);
+  });
+
+  test('what you carry out reaches the stash', () => {
+    // The end of the chain, and the part with the most places to go wrong:
+    // raid inventory -> profile loadout -> stash, across two systems and a
+    // screen transition.
+    const { profile, session } = deploy();
+    const before = profile.stash.items().length;
+
+    const prize = createStack('ammo_545_bp', 30);
+    assert.ok(session.player.inventory.store(prize), 'the player should have room for it');
+
+    holdExtract(session, freeExtract(session));
+    assert.equal(session.raidResult?.survived, true);
+    assert.ok(session.raidResult.lootValue > 0, 'carried goods should be valued');
+
+    // The two steps the game shell performs after a raid.
+    session.commitToProfile();
+    const { overflow } = profile.depositLoadout();
+    assert.equal(overflow, 0, 'a nearly empty stash should have room');
+
+    // Ammunition deliberately stays on the rig rather than going to the stash,
+    // so the round trip is checked on the loadout for this one.
+    const inLoadout = profile.loadout
+      .allGrids()
+      .some(({ grid }) => grid.items().some((s) => s.defId === 'ammo_545_bp'));
+    assert.ok(inLoadout, 'the ammunition carried out should still be on the rig');
+    assert.ok(
+      profile.stash.items().length >= before,
+      'extracting must never shrink the stash',
+    );
+  });
+
+  test('dying leaves everything behind except the secure container', () => {
+    // The other half of risk and reward. If death does not cost the loadout,
+    // nothing about extracting is a decision.
+    const { profile, session } = deploy(11, false);
+
+    const loose = createStack('ammo_545_bp', 30);
+    session.player.inventory.store(loose);
+    const carriedBefore = session.player.inventory
+      .allGrids()
+      .reduce((n, { grid }) => n + grid.items().length, 0);
+    assert.ok(carriedBefore > 0, 'the player should be carrying something to lose');
+
+    session.player.health.kill('Test');
+    for (let i = 0; i < 240 && session.phase !== 'ended'; i++) session.update(1 / 60);
+
+    const result = session.raidResult;
+    assert.ok(result, 'dying should produce a result');
+    assert.equal(result.survived, false);
+    assert.ok(result.lostValue > 0, 'dying should be recorded as a loss');
+
+    session.commitToProfile();
+    const carriedAfter = profile.loadout
+      .allGrids()
+      .reduce((n, { grid }) => n + grid.items().length, 0);
+    assert.ok(
+      carriedAfter < carriedBefore,
+      `death should strip the loadout (${carriedBefore} -> ${carriedAfter})`,
+    );
   });
 });
 
